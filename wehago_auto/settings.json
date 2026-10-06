@@ -1,0 +1,23 @@
+{
+  "deductible_type": "카과",
+  "non_deductible_type": "일반",
+  "always_general_kinds": [
+    "간이",
+    "면세"
+  ],
+  "non_deductible_accounts": [
+    "접대비",
+    "기업업무추진비"
+  ],
+  "non_deductible_industry_keywords": [
+    "항공",
+    "여객",
+    "택시",
+    "고속버스",
+    "시외버스",
+    "철도",
+    "목욕",
+    "이발",
+    "미용"
+  ]
+}

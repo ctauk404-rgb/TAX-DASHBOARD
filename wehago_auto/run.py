@@ -1,0 +1,52 @@
+"""실행 진입점.
+
+  python run.py recon --client 팔각도      위하고 화면 구조 조사 (읽기만 함)
+  python run.py plan rows.csv --client 팔각도   표 데이터(CSV)로 분류 결과 미리보기 (개발·점검용)
+"""
+
+import argparse
+import csv
+import sys
+
+from classifier import classify, group_by_merchant, load_rules, load_settings
+
+
+def cmd_recon(args):
+    from wehago import recon
+
+    client = args.client or input("작업할 수임처 이름: ").strip()
+    recon(client, args.out)
+
+
+def cmd_plan(args):
+    rules, settings = load_rules(), load_settings()
+    with open(args.rows, encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    writer = csv.writer(sys.stdout)
+    writer.writerow(["거래처", "건수", "구분", "유형", "차변계정", "근거", "검토"])
+    for group in group_by_merchant(rows).values():
+        d = classify(group[0], args.client, rules, settings)
+        writer.writerow([group[0]["거래처"], len(group), group[0].get("구분", ""),
+                         d.vat_type, d.account or "(미정)", d.reason, "검토" if d.review else ""])
+
+
+def main():
+    parser = argparse.ArgumentParser(description="위하고 신용카드 매입 자동분류")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("recon", help="위하고 화면 구조 조사")
+    p.add_argument("--client", help="수임처 이름 (예: 팔각도)")
+    p.add_argument("--out", default="recon_결과.json")
+    p.set_defaults(func=cmd_recon)
+
+    p = sub.add_parser("plan", help="CSV 로 분류 결과 미리보기")
+    p.add_argument("rows")
+    p.add_argument("--client", default="")
+    p.set_defaults(func=cmd_plan)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
