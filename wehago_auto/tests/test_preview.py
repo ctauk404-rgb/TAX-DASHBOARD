@@ -9,7 +9,8 @@ from preview import build_groups, render  # noqa: E402
 
 
 def raw(nm_trade, ty_biz, ty_mth, acct, vat=100.0):
-    return {"nm_trade": nm_trade, "ty_biz": ty_biz, "ty_mth": ty_mth, "nm_acctit_cha": acct,
+    ty_mth = {2: "57", 3: "3"}[ty_mth]
+    return {"nm_trade": nm_trade, "ty_biz": ty_biz, "ty_mth2": ty_mth, "nm_acctit_cha": acct,
             "mn_vat": vat, "mn_total": 1100.0, "ty_jungstat": 1, "bizcond": "", "bizcate": ""}
 
 

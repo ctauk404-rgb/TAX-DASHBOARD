@@ -329,6 +329,7 @@ _GRID_JS = r"""
     return out;
   };
   const uniq = [...new Map(found.map(x => [x[0], x])).values()];
+  window.__wehagoAll = uniq.map(x => x[0]);  // 자동 입력(grid.py)에서 다시 씀
   return uniq.map(([g, path]) => {
     const r = {path};
     try { r.columns = (g.getColumns() || []).map(pick); } catch (e) { r.columns_error = String(e); }

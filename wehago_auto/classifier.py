@@ -13,6 +13,10 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent
 
 DEFAULT_SETTINGS = {
+    # 유형 이름 → 위하고 유형 코드(ty_mth2). 유형 칸에 이 숫자를 입력한다.
+    "type_codes": {"카과": "57", "일반": "3"},
+    # 자동 입력할 전표상태 코드 (비어 있으면 실행할 때 물어봄)
+    "editable_states": [],
     # 매입세액 공제 받는 카드 매입의 유형 (더존 매입매출 유형 '카과')
     "deductible_type": "카과",
     # 공제 받지 않는 경우의 유형

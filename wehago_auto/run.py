@@ -3,6 +3,8 @@
   python run.py recon --client 팔각도      위하고 화면 구조 조사 (읽기만 함)
   python run.py recon2 --client 팔각도     표 구조·저장 방식 조사 (한 건 수정 후 원복)
   python run.py preview --client 팔각도    분류 미리보기 (위하고에 쓰지 않음) + 3차 조사
+  python run.py apply --client 팔각도      미리보기 → 1건 시험 → 유형·차변계정 자동 입력
+  python run.py undo 원복_팔각도_xxx.csv   자동 입력한 값을 되돌리기
   python run.py plan rows.csv --client 팔각도   표 데이터(CSV)로 분류 결과 미리보기 (개발·점검용)
 """
 
@@ -34,6 +36,19 @@ def cmd_preview(args):
     preview_session(client)
 
 
+def cmd_apply(args):
+    from session import apply_session
+
+    client = args.client or input("작업할 수임처 이름: ").strip()
+    apply_session(client)
+
+
+def cmd_undo(args):
+    from session import undo_session
+
+    undo_session(args.log)
+
+
 def cmd_plan(args):
     rules, settings = load_rules(), load_settings()
     with open(args.rows, encoding="utf-8-sig", newline="") as f:
@@ -63,6 +78,14 @@ def main():
     p = sub.add_parser("preview", help="분류 미리보기 + 3차 조사")
     p.add_argument("--client", help="수임처 이름")
     p.set_defaults(func=cmd_preview)
+
+    p = sub.add_parser("apply", help="미리보기 → 1건 시험 → 자동 입력 (전표전송은 안 함)")
+    p.add_argument("--client", help="수임처 이름")
+    p.set_defaults(func=cmd_apply)
+
+    p = sub.add_parser("undo", help="원복_*.csv 기록대로 되돌리기")
+    p.add_argument("log")
+    p.set_defaults(func=cmd_undo)
 
     p = sub.add_parser("plan", help="CSV 로 분류 결과 미리보기")
     p.add_argument("rows")

@@ -1,4 +1,9 @@
 {
+  "type_codes": {
+    "카과": "57",
+    "일반": "3"
+  },
+  "editable_states": [],
   "deductible_type": "카과",
   "non_deductible_type": "일반",
   "always_general_kinds": [

@@ -1,0 +1,129 @@
+"""위하고 카드 매입 표(RealGrid)에 값을 넣는다.
+
+3차 조사 결과
+- 표 객체는 React 컴포넌트의 _gridView. 카드 목록 표는 ty_jungstat 칸이 있는 표다.
+- 화면 '유형' = ty_mth2, '차변계정' = cd_acctit_cha / nm_acctit_cha.
+- 사용자가 칸을 고치면 위하고가 곧바로 PUT /smarta/saac0105/6/{sq_sbook}/ 로 서버에 저장한다.
+
+그래서 값을 직접 데이터에 써 넣지 않고, 사람이 하는 것과 똑같이
+'그 칸으로 이동 → 키보드로 입력 → Enter' 를 한다. 저장 요청은 위하고가 스스로 보낸다.
+"""
+
+import time
+from urllib.parse import urlsplit
+
+_MAIN = """
+const __main = () => (window.__wehagoAll || window.__wehagoGrids || []).find(g => {
+  try { return g.columnByField('ty_jungstat') && g.getDataSource().getRowCount() > 0; }
+  catch (e) { return false; }
+});
+"""
+
+HAS_MAIN_JS = "() => {" + _MAIN + " return !!__main(); }"
+
+LOCATE_JS = "(sq) => {" + _MAIN + """
+  const g = __main(); if (!g) return null;
+  const ds = g.getDataSource(), n = ds.getRowCount();
+  for (let r = 0; r < n; r++) {
+    if (String(ds.getValue(r, 'sq_sbook')) === String(sq)) return {row: r, item: g.getItemIndex(r)};
+  }
+  return null;
+}"""
+
+FOCUS_JS = "([item, field]) => {" + _MAIN + """
+  const g = __main();
+  g.setCurrent({itemIndex: item, column: field, fieldName: field});
+  g.setFocus();
+  const c = g.getCurrent();
+  return c && c.itemIndex === item && (c.column === field || c.fieldName === field);
+}"""
+
+VALUE_JS = "([item, field]) => {" + _MAIN + """
+  const v = __main().getValue(item, field);
+  return v === null || v === undefined ? '' : String(v);
+}"""
+
+# 전표상태 칸이 화면에 글자를 어떻게 그리는지(코드 → 글자) 알아내기 위한 조사
+STATUS_PROBE_JS = "() => {" + _MAIN + """
+  const g = __main(); if (!g) return null;
+  const out = {};
+  try {
+    const col = g.columnByField('ty_jungstat');
+    for (const k of Object.keys(col || {})) {
+      const v = col[k];
+      out[k] = typeof v === 'function' ? String(v).slice(0, 1500)
+             : (v && typeof v === 'object') ? Object.keys(v).slice(0, 30) : v;
+    }
+  } catch (e) { out.error = String(e); }
+  return out;
+}"""
+
+
+# 값 칸 → 사람이 입력하는 화면 칸. 계정 코드 칸(cd_acctit_cha)은 숨어 있어서
+# 화면의 '차변계정' 칸(nm_acctit_cha)에 계정 코드를 입력한다.
+INPUT_COLUMN = {"ty_mth2": "ty_mth2", "cd_acctit_cha": "nm_acctit_cha"}
+
+
+class GridEditor:
+    def __init__(self, page):
+        self.page = page
+        self.frame = self._find_frame()
+
+    def _find_frame(self):
+        for frame in self.page.frames:
+            try:
+                if frame.evaluate(HAS_MAIN_JS):
+                    return frame
+            except Exception:
+                pass
+        raise LookupError("위하고 카드 매입 표를 찾지 못했습니다. [조회] 를 다시 눌러 주세요.")
+
+    def value(self, item, field):
+        return self.frame.evaluate(VALUE_JS, [item, field])
+
+    def edit(self, sq_sbook, field, typed, expect):
+        """sq_sbook 건의 field 값을 바꾼다. 화면에 보이는 칸(INPUT_COLUMN)에 typed 를 입력하고
+        field 값이 expect 가 되었는지 확인한다.
+
+        돌려주는 값: (성공 여부, 입력 전 값, 입력 후 값, 메모)
+        """
+        loc = self.frame.evaluate(LOCATE_JS, sq_sbook)
+        if not loc:
+            return False, "", "", "표에서 이 건을 찾지 못함"
+        item = loc["item"]
+        before = self.value(item, field)
+        if before == expect:
+            return True, before, before, "이미 같은 값"
+        if not self.frame.evaluate(FOCUS_JS, [item, INPUT_COLUMN.get(field, field)]):
+            return False, before, before, "칸으로 이동하지 못함"
+        self.page.wait_for_timeout(300)
+
+        saved = []
+
+        def on_response(r):
+            if r.request.method == "PUT" and urlsplit(r.url).path.rstrip("/").endswith(f"/{sq_sbook}"):
+                saved.append(r.status)
+
+        self.page.on("response", on_response)
+        try:
+            self.page.keyboard.type(str(typed), delay=60)
+            self.page.wait_for_timeout(400)
+            self.page.keyboard.press("Enter")
+            deadline = time.time() + 6
+            after = before
+            while time.time() < deadline:
+                self.page.wait_for_timeout(300)
+                after = self.value(item, field)
+                if after == expect and saved:
+                    break
+        finally:
+            self.page.remove_listener("response", on_response)
+
+        if after != expect:
+            self.page.keyboard.press("Escape")
+            return False, before, after, "입력 후 값이 예상과 다름"
+        if not saved:
+            return False, before, after, "위하고 저장 요청이 확인되지 않음"
+        if any(s >= 400 for s in saved):
+            return False, before, after, f"위하고 저장 실패 (HTTP {saved})"
+        return True, before, after, "저장됨"

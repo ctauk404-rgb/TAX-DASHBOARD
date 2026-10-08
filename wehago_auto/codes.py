@@ -3,12 +3,15 @@
 2차 조사(704건)의 코드별 건수로 추정한 값이다. 표 객체에서 실제 표시값 목록을
 읽어 오면 그것으로 덮어쓴다 (merge_grid_labels).
 - ty_biz 4 = 6건 = freetax 1 인 6건 → 면세
-- ty_mth 2 ↔ ty_mth2 57(더존 매입매출 유형 57 카과), ty_mth 3 ↔ ty_mth2 3 → 일반
+- 화면 '유형' 칸은 ty_mth2 (3차 조사에서 확인). 57 = 더존 매입매출 유형 카과,
+  3 = 일반전표. ty_mth 는 숨은 '전표유형' 칸 (2 매입매출, 3 일반)
 """
 
 TENTATIVE = {
     "ty_biz": {"1": "일반", "2": "법인", "3": "간이", "4": "면세"},   # 화면 '구분'
-    "ty_mth": {"2": "카과", "3": "일반"},                            # 화면 '유형'
+    "ty_mth2": {"3": "일반", "51": "과세", "52": "영세", "53": "면세", "54": "불공",
+                "55": "수입", "57": "카과", "58": "카면", "59": "카영",
+                "61": "현과", "62": "현면"},                          # 화면 '유형'
     "ty_jungstat": {},                                               # 화면 '전표상태' (미확인)
     "ty_gongjea": {"1": "공제", "2": "불공제"},                       # 화면 '국세청'
 }
@@ -54,7 +57,11 @@ def to_row(d, codes):
         "세액": "" if d.get("mn_vat") is None else d.get("mn_vat"),
         "합계": d.get("mn_total"),
         "차변계정": d.get("nm_acctit_cha") or "",
-        "유형": label(codes, "ty_mth", d.get("ty_mth")),
+        "유형": label(codes, "ty_mth2", d.get("ty_mth2")),
+        "유형코드": str(d.get("ty_mth2") or ""),
+        "계정코드": str(d.get("cd_acctit_cha") or ""),
+        "전표상태코드": str(d.get("ty_jungstat") or ""),
+        "sq_sbook": d.get("sq_sbook"),
         "전표상태": label(codes, "ty_jungstat", d.get("ty_jungstat")),
         "국세청": label(codes, "ty_gongjea", d.get("ty_gongjea")),
         "일자": d.get("da_sbook") or "",
