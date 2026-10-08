@@ -188,3 +188,108 @@ class GridEditor:
         if any(s >= 400 for s in saved):
             return False, before, after, f"위하고 저장 실패 (HTTP {saved})"
         return True, before, after, "저장됨"
+
+    # ---- 거래처별 일괄변경 (recon5 로 확인한 위하고 방식) ----------------------
+    # 같은 거래처 줄들을 체크 → 맨 위 줄 하나를 고침 → 하단 [일괄변경] → [확인]
+    # → 위하고가 PUT /smarta/saac0105/batch/6/ 으로 체크된 줄 전체를 저장한다.
+    def values(self, sqs, field):
+        out = {}
+        for sq in sqs:
+            loc = self.frame.evaluate(LOCATE_JS, sq)
+            out[str(sq)] = self.value(loc["item"], field) if loc else None
+        return out
+
+    def _visible_buttons(self, name):
+        found = []
+        for frame in self.page.frames:
+            loc = frame.get_by_role("button", name=name, exact=True)
+            for i in range(min(loc.count(), 10)):
+                b = loc.nth(i)
+                try:
+                    if b.is_visible():
+                        found.append(b)
+                except Exception:
+                    pass
+        return found
+
+    def _click_bulk_button(self):
+        buttons = self._visible_buttons("일괄변경")
+        if not buttons:
+            raise LookupError("[일괄변경] 버튼을 찾지 못함")
+        # 하단 일괄변경 = 화면에서 가장 아래 있는 것
+        buttons.sort(key=lambda b: (b.bounding_box() or {"y": 0})["y"])
+        buttons[-1].click()
+
+    def _confirm_dialogs(self, wait_ms=2500):
+        """일괄변경 후 뜨는 확인 창들을 [확인] 으로 닫는다. 닫은 횟수를 돌려준다."""
+        clicked, deadline = 0, time.time() + wait_ms / 1000
+        while time.time() < deadline and clicked < 3:
+            buttons = self._visible_buttons("확인")
+            if buttons:
+                buttons[-1].click()
+                clicked += 1
+                self.page.wait_for_timeout(600)
+                deadline = time.time() + 1.5
+            else:
+                self.page.wait_for_timeout(200)
+        return clicked
+
+    def bulk_edit(self, sqs, field, typed, expect):
+        """sqs 건들의 field 를 한 번에 expect 로 바꾼다.
+
+        돌려주는 값: {sq: (성공 여부, 입력 전 값, 입력 후 값, 메모)}
+        """
+        sqs = [str(s) for s in sqs]
+        before = self.values(sqs, field)
+        todo = [s for s in sqs if before[s] is not None and before[s] != expect]
+        result = {s: (True, before[s], before[s], "이미 같은 값") for s in sqs if before[s] == expect}
+        for s in sqs:
+            if before[s] is None:
+                result[s] = (False, "", "", "표에서 이 건을 찾지 못함")
+        if not todo:
+            return result
+        if len(todo) == 1:
+            result[todo[0]] = self.edit(todo[0], field, typed, expect)
+            return result
+
+        checked = self.check(todo)
+        if checked.get("checked") != len(todo):
+            raise RuntimeError(f"체크 실패 ({checked})")
+        head = todo[0]
+        ok, b, a, memo = self.edit(head, field, typed, expect)
+        if not ok:
+            for s in todo:
+                result[s] = (False, before[s], b if s == head else before[s], f"첫 줄 입력 실패: {memo}")
+            return result
+
+        # 고친 칸에 커서를 다시 두고 일괄변경
+        loc = self.frame.evaluate(LOCATE_JS, head)
+        self.frame.evaluate(FOCUS_JS, [loc["item"], INPUT_COLUMN.get(field, field)])
+        self.page.wait_for_timeout(300)
+        batch = []
+
+        def on_response(r):
+            if r.request.method == "PUT" and "/saac0105/batch/" in urlsplit(r.url).path:
+                batch.append(r.status)
+
+        self.page.on("response", on_response)
+        try:
+            self._click_bulk_button()
+            self._confirm_dialogs()
+            deadline = time.time() + 8
+            while time.time() < deadline and not batch:
+                self.page.wait_for_timeout(300)
+            self.page.wait_for_timeout(1500)  # 위하고가 바뀐 줄을 다시 불러오는 시간
+        finally:
+            self.page.remove_listener("response", on_response)
+
+        after = self.values(todo, field)
+        status = "일괄변경 저장됨" if batch and all(s < 400 for s in batch) else f"일괄변경 저장 확인 안 됨 {batch}"
+        for s in todo:
+            done = after[s] == expect
+            result[s] = (done and bool(batch), before[s], after[s] or "", status if done else "일괄변경 후 값이 예상과 다름")
+        try:
+            self.check([])  # 체크 해제
+        except Exception:
+            pass
+        return result

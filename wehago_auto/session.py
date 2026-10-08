@@ -107,24 +107,52 @@ def write_log(path, row):
         w.writerow(row)
 
 
-def run_changes(editor, changes, log_path, client):
+def _log(log_path, client, ch, sq, success, before, after, memo):
+    write_log(log_path, {
+        "시각": datetime.now().strftime("%H:%M:%S"), "수임처": client,
+        "sq_sbook": sq, "거래처": ch["거래처"], "field": ch["field"], "칸": ch["칸"],
+        "입력 전": before, "입력 후": after, "결과": "성공" if success else "실패", "메모": memo,
+    })
+
+
+def batches(changes):
+    """같은 거래처·같은 칸·같은 값으로 바꾸는 건끼리 묶는다 (입력 순서 유지)."""
+    from classifier import normalize
+
+    out = {}
+    for ch in changes:
+        out.setdefault((normalize(ch["거래처"]), ch["field"], ch["expect"]), []).append(ch)
+    return list(out.values())
+
+
+def run_changes(editor, changes, log_path, client, bulk=True):
+    """변경을 적용한다. bulk 이면 거래처별로 묶어 위하고 [일괄변경] 을 쓴다."""
     ok = fail = streak = 0
-    for i, ch in enumerate(changes, 1):
-        success, before, after, memo = editor.edit(ch["sq_sbook"], ch["field"], ch["typed"], ch["expect"])
-        write_log(log_path, {
-            "시각": datetime.now().strftime("%H:%M:%S"), "수임처": client,
-            "sq_sbook": ch["sq_sbook"], "거래처": ch["거래처"], "field": ch["field"], "칸": ch["칸"],
-            "입력 전": before, "입력 후": after, "결과": "성공" if success else "실패", "메모": memo,
-        })
-        mark = "✔" if success else "✘"
-        print(f"  [{i}/{len(changes)}] {mark} {ch['거래처']} · {ch['칸']} {ch['전']} → {ch['후']} ({memo})")
-        if success:
-            ok, streak = ok + 1, 0
-        else:
-            fail, streak = fail + 1, streak + 1
-            if streak >= 3:
-                print("\n연속 3건 실패해서 멈춥니다. 위하고 화면 상태를 확인해 주세요.")
-                break
+    groups = batches(changes) if bulk else [[c] for c in changes]
+    for i, group in enumerate(groups, 1):
+        ch = group[0]
+        sqs = [str(c["sq_sbook"]) for c in group]
+        try:
+            if len(group) == 1:
+                results = {sqs[0]: editor.edit(sqs[0], ch["field"], ch["typed"], ch["expect"])}
+            else:
+                results = editor.bulk_edit(sqs, ch["field"], ch["typed"], ch["expect"])
+        except Exception as e:
+            print(f"  일괄변경 실패 ({e}) → 한 건씩 입력합니다")
+            results = {sq: editor.edit(sq, ch["field"], ch["typed"], ch["expect"]) for sq in sqs}
+        good = 0
+        for c in group:
+            success, before, after, memo = results[str(c["sq_sbook"])]
+            _log(log_path, client, c, c["sq_sbook"], success, before, after, memo)
+            good += success
+        mark = "✔" if good == len(group) else "✘"
+        print(f"  [{i}/{len(groups)}] {mark} {ch['거래처']} · {ch['칸']} {ch['전']} → {ch['후']}"
+              f" ({good}/{len(group)}건)")
+        ok, fail = ok + good, fail + len(group) - good
+        streak = 0 if good else streak + 1
+        if streak >= 3:
+            print("\n연속 3번 실패해서 멈춥니다. 위하고 화면 상태를 확인해 주세요.")
+            break
     return ok, fail
 
 
@@ -167,17 +195,23 @@ def apply_session(client, out_dir="."):
         log_path = out_dir / f"원복_{client}_{stamp}.csv"
         # 유형부터: 유형이 바뀌면 위하고가 계정을 다시 추천할 수 있어서
         changes.sort(key=lambda c: (c["field"] != "ty_mth2", str(c["sq_sbook"])))
-        if not ask_yes(f"\n먼저 1건만 시험으로 입력해 볼까요? [{changes[0]['거래처']} · "
-                       f"{changes[0]['칸']} {changes[0]['전']} → {changes[0]['후']}]"):
+        editor.sort_by_merchant()  # 화면 '거래처' 머리글 클릭과 같은 정렬
+        groups = batches(changes)
+        # 시험: 2건 이상인 거래처 하나로 일괄변경까지 확인
+        trial = next((g for g in groups if len(g) >= 2), groups[0])
+        t = trial[0]
+        if not ask_yes(f"\n먼저 거래처 하나만 시험으로 입력해 볼까요? [{t['거래처']} {len(trial)}건 · "
+                       f"{t['칸']} {t['전']} → {t['후']}]"):
             return
-        ok, _ = run_changes(editor, changes[:1], log_path, client)
+        ok, _ = run_changes(editor, trial, log_path, client)
+        rest = [c for c in changes if c not in trial]
         if not ok:
             print("시험 입력이 실패했습니다. 화면을 그대로 두고 Claude에게 결과를 알려 주세요.")
             input("Enter를 누르면 끝납니다...")
             return
         print("위하고 화면에서 그 건의 값과 전표상태를 확인해 보세요.")
-        if ask_yes(f"나머지 {len(changes) - 1}건도 입력할까요?"):
-            ok2, fail = run_changes(editor, changes[1:], log_path, client)
+        if ask_yes(f"나머지 {len(rest)}건도 입력할까요?"):
+            ok2, fail = run_changes(editor, rest, log_path, client)
             print(f"\n완료: 성공 {ok + ok2}건, 실패 {fail}건. 기록: {log_path}")
         print("\n전표전송은 하지 않았습니다. 위하고에서 확인하신 뒤 직접 전송해 주세요.")
         print(f"되돌리려면: undo.bat {log_path.name}")
@@ -202,7 +236,7 @@ def undo_session(log_file, out_dir="."):
         run.open()
         editor = GridEditor(run.w.page)
         out = Path(out_dir) / f"원복실행_{log_file.stem}.csv"
-        ok, fail = run_changes(editor, changes, out, client)
+        ok, fail = run_changes(editor, changes, out, client, bulk=False)
         print(f"\n되돌리기 완료: 성공 {ok}건, 실패 {fail}건. 기록: {out}")
         input("Enter를 누르면 브라우저가 닫힙니다...")
 
