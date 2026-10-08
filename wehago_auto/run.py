@@ -2,6 +2,7 @@
 
   python run.py recon --client 팔각도      위하고 화면 구조 조사 (읽기만 함)
   python run.py recon2 --client 팔각도     표 구조·저장 방식 조사 (한 건 수정 후 원복)
+  python run.py preview --client 팔각도    분류 미리보기 (위하고에 쓰지 않음) + 3차 조사
   python run.py plan rows.csv --client 팔각도   표 데이터(CSV)로 분류 결과 미리보기 (개발·점검용)
 """
 
@@ -24,6 +25,13 @@ def cmd_recon2(args):
 
     client = args.client or input("작업할 수임처 이름: ").strip()
     recon2(client, args.out)
+
+
+def cmd_preview(args):
+    from wehago import preview_session
+
+    client = args.client or input("작업할 수임처 이름: ").strip()
+    preview_session(client)
 
 
 def cmd_plan(args):
@@ -51,6 +59,10 @@ def main():
     p.add_argument("--client", help="수임처 이름")
     p.add_argument("--out", default="recon2_결과.json")
     p.set_defaults(func=cmd_recon2)
+
+    p = sub.add_parser("preview", help="분류 미리보기 + 3차 조사")
+    p.add_argument("--client", help="수임처 이름")
+    p.set_defaults(func=cmd_preview)
 
     p = sub.add_parser("plan", help="CSV 로 분류 결과 미리보기")
     p.add_argument("rows")

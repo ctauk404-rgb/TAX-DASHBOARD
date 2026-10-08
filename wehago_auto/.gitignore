@@ -1,2 +1,3 @@
-recon_*.json
+recon*_*.json
+미리보기_*.html
 __pycache__/

@@ -148,7 +148,7 @@ def classify(row, client, rules, settings=DEFAULT_SETTINGS):
     elif any(a in account for a in settings["non_deductible_accounts"]):
         vat_type = general
         reasons.append("불공제 계정")
-    elif parse_amount(row.get("세액")) == 0:
+    elif str(row.get("세액") or "").strip() != "" and parse_amount(row.get("세액")) == 0:
         vat_type = general
         reasons.append("세액 0원")
     elif any(k in industry for k in settings["non_deductible_industry_keywords"]):

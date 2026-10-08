@@ -125,7 +125,8 @@ class Wehago:
 
         def check_all_cards():
             value = self.filter_value("카드")
-            if value != "전체거래처":
+            # 아무 카드도 고르지 않으면 검색 안내문이 보이는데, 이것도 전체 카드다.
+            if value != "전체거래처" and "검색" not in value:
                 raise RuntimeError(f"카드 칸이 '{value}' 임")
 
         def search():
@@ -270,6 +271,7 @@ _GRID_JS = r"""
     && typeof o.getColumns === 'function'
     && (typeof o.getDataSource === 'function' || typeof o.getDataProvider === 'function');
   const found = [], seen = new Set();
+  for (const g of (window.__wehagoGrids || [])) found.push([g, 'hook']);
   const visit = (root, path) => {
     const queue = [[root, path, 0]];
     let budget = 30000;
@@ -300,6 +302,14 @@ _GRID_JS = r"""
           try { if (f[part] && typeof f[part] === 'object' && !(f[part] instanceof Node)) visit(f[part], 'react.' + part); } catch (e) {}
         }
         if (f._currentElement || f._instance) { try { visit(f._instance, 'react15._instance'); } catch (e) {} }
+      }
+      if (key.startsWith('__reactInternalInstance')) {
+        // React 15: DOM 노드 → 그 노드를 그린 컴포넌트(_owner)를 따라 올라간다
+        let inst = n[key]._currentElement && n[key]._currentElement._owner;
+        for (let j = 0; inst && j < 15; j++) {
+          try { visit(inst._instance, 'react15.owner'); } catch (e) {}
+          inst = inst._currentElement && inst._currentElement._owner;
+        }
       }
       if (n._reactInternalInstance) {
         for (let f = n._reactInternalInstance, j = 0; f && j < 40; f = f._hostParent || f._currentElement?._owner, j++) {
@@ -335,6 +345,76 @@ _GRID_JS = r"""
   });
 }
 """
+
+# 위하고 페이지가 RealGrid 표를 만들 때 그 표 객체를 기억해 두는 스크립트.
+# 표의 공개 메서드를 감싸서 (1) 표 객체를 window.__wehagoGrids 에 모으고
+# (2) 추적 중일 때 어떤 메서드가 불렸는지 센다. 위하고 동작은 바꾸지 않는다.
+GRID_HOOK_JS = r"""
+(() => {
+  if (window.__wehagoHooked) return;
+  window.__wehagoHooked = true;
+  window.__wehagoGrids = [];
+  window.__wehagoTrace = null;
+  const done = new WeakSet();
+  const wrap = (cls, kind) => {
+    for (let proto = cls && cls.prototype; proto && proto !== Object.prototype;
+         proto = Object.getPrototypeOf(proto)) {
+      if (done.has(proto)) continue;
+      done.add(proto);
+      for (const name of Object.getOwnPropertyNames(proto)) {
+        if (name === 'constructor' || !/^[a-z][A-Za-z]{3,}$/.test(name)) continue;
+        const d = Object.getOwnPropertyDescriptor(proto, name);
+        if (!d || typeof d.value !== 'function' || !d.writable) continue;
+        const orig = d.value;
+        proto[name] = function (...args) {
+          if (kind === 'grid' && !window.__wehagoGrids.includes(this)) window.__wehagoGrids.push(this);
+          const t = window.__wehagoTrace;
+          if (t) { const k = kind + '.' + name; t[k] = (t[k] || 0) + 1; }
+          return orig.apply(this, args);
+        };
+      }
+    }
+  };
+  setInterval(() => {
+    for (const ns of [window.RealGrid, window.RealGridJS]) {
+      if (!ns) continue;
+      try {
+        wrap(ns.GridView, 'grid'); wrap(ns.TreeView, 'grid');
+        wrap(ns.LocalDataProvider, 'data'); wrap(ns.LocalTreeDataProvider, 'data');
+      } catch (e) {}
+    }
+  }, 300);
+})();
+"""
+
+# 표 데이터 중 코드값 칸만 꺼낸다 (수정 전후 비교용, 가맹점명·금액 제외)
+SNAPSHOT_FIELDS = ["ty_mth", "ty_mth2", "ty_jungstat", "ty_gongjea", "cd_acctit_cha", "nm_acctit_cha"]
+
+_SNAPSHOT_JS = r"""
+(fields) => (window.__wehagoGrids || []).map(g => {
+  try {
+    const ds = g.getDataSource ? g.getDataSource() : g.getDataProvider();
+    const rows = ds.getJsonRows ? ds.getJsonRows(0, -1) : [];
+    return rows.map(r => fields.map(f => r[f] === undefined ? null : r[f]));
+  } catch (e) { return String(e); }
+})
+"""
+
+
+def diff_snapshots(before, after):
+    out = []
+    for gi, (b, a) in enumerate(zip(before, after)):
+        if not isinstance(b, list) or not isinstance(a, list):
+            continue
+        for ri, (rb, ra) in enumerate(zip(b, a)):
+            for fi, (vb, va) in enumerate(zip(rb, ra)):
+                if vb != va:
+                    out.append({"grid": gi, "row": ri, "field": SNAPSHOT_FIELDS[fi],
+                                "before": vb, "after": va})
+        if len(a) != len(b):
+            out.append({"grid": gi, "row_count": [len(b), len(a)]})
+    return out[:200]
+
 
 # 목록 데이터 중 코드값만 세어 본다 (가맹점명·금액은 담지 않음)
 COUNT_FIELDS = ["ty_jungstat", "ty_trade", "ty_gongjea", "ty_mth", "ty_mth2", "ty_biz",
@@ -408,3 +488,100 @@ def recon2(client, out_path):
         browser.close()
     print(f"\n조사 결과를 저장했습니다: {out_path}")
     print("가맹점명·금액 등 표 내용은 들어 있지 않습니다. 이 파일을 Claude에게 보내 주세요.")
+
+
+# ---- 미리보기 + 3차 조사 ----------------------------------------------------
+def preview_session(client, out_dir="."):
+    """위하고에서 카드 목록을 읽어 분류 미리보기를 만든다 (위하고에는 쓰지 않음).
+
+    이어서 사용자가 한 건을 고쳤다 되돌릴 때 표 안에서 무슨 일이 일어나는지 기록한다.
+    """
+    import json
+    import webbrowser
+    from datetime import datetime
+    from pathlib import Path
+
+    import codes as codes_mod
+    from classifier import load_rules, load_settings
+    from preview import build_groups, render
+
+    out_dir = Path(out_dir)
+    with sync_playwright() as p:
+        browser = launch(p)
+        context = browser.new_context(viewport={"width": 1600, "height": 900})
+        context.add_init_script(GRID_HOOK_JS)
+        lists = []
+        context.on("response", lambda r: lists.append(r)
+                   if urlsplit(r.url).path == CARD_LIST_PATH and r.request.method == "POST" else None)
+
+        w = Wehago(context)
+        w.wait_login()
+        w.open_card_purchase_list(client)
+        input("\n카드 매입 내역 표가 화면에 보이면 Enter를 누르세요...")
+
+        def each_frame(js, arg=None):
+            out = []
+            for frame in w.page.frames:
+                try:
+                    out.append(frame.evaluate(js, arg) if arg is not None else frame.evaluate(js))
+                except Exception as e:
+                    out.append({"frame_error": str(e)})
+            return out
+
+        grids = [g for res in each_frame(_GRID_JS) if isinstance(res, list) for g in res]
+        data = []
+        if lists:
+            try:
+                data = lists[-1].json().get("data", [])
+            except Exception as e:
+                print(f"목록 데이터를 읽지 못했습니다: {e}")
+        if not data:
+            print("카드 목록 데이터를 찾지 못했습니다. [조회] 를 한 번 더 누른 뒤 Enter를 누르세요.")
+            input()
+            if lists:
+                data = lists[-1].json().get("data", [])
+
+        codes, confirmed = codes_mod.merge_grid_labels(grids)
+        note = ("코드 표시값: " + ", ".join(
+            f"{f}={'확인됨' if f in confirmed else '추정'}" for f in codes_mod.TENTATIVE))
+        rows = [codes_mod.to_row(d, codes) for d in data]
+        groups = build_groups(rows, client, load_rules(), load_settings())
+        stamp = datetime.now().strftime("%Y%m%d_%H%M")
+        report = out_dir / f"미리보기_{client}_{stamp}.html"
+        report.write_text(render(client, rows, groups, note), encoding="utf-8")
+        webbrowser.open(report.resolve().as_uri())
+        print(f"\n미리보기를 열었습니다: {report}  ({len(rows)}건, 거래처 {len(groups)}곳)")
+
+        # 3차 조사: 한 건 수정 → 원복 동안 표 내부 변화 기록
+        before = [s for res in each_frame(_SNAPSHOT_JS, SNAPSHOT_FIELDS) for s in res]
+        each_frame("() => { window.__wehagoTrace = {}; }")
+        sent = []
+        context.on("request", lambda r: sent.append(r)
+                   if r.resource_type in ("xhr", "fetch") else None)
+        print("\n[조사] 위하고 표에서 아무 거래 한 건의")
+        print("  1) [유형] 을 다른 값으로 바꾸고 → 전표상태가 어떻게 되는지 보신 뒤")
+        print("  2) [차변계정] 도 다른 계정으로 바꿔 주세요.")
+        input("바꾸셨으면 Enter를 누르세요 (아직 되돌리지 마세요)...")
+        changed = [s for res in each_frame(_SNAPSHOT_JS, SNAPSHOT_FIELDS) for s in res]
+        trace = each_frame("() => window.__wehagoTrace")
+        requests = [{"method": r.method, "path": urlsplit(r.url).path,
+                     "body": body_shape(r) if r.method != "GET" else None}
+                    for r in sent if "/collect" not in r.url and "lpevent" not in r.url]
+        input("\n이제 그 건을 원래 값으로 되돌리시고 Enter를 누르세요 (전표전송은 누르지 마세요)...")
+
+        result = {
+            "steps": w.log,
+            "grids": grids,
+            "codes_used": codes,
+            "codes_confirmed": sorted(confirmed),
+            "row_count": len(rows),
+            "edit_diff": diff_snapshots(before, changed),
+            "edit_trace": [t for t in trace if t],
+            "edit_requests": requests,
+        }
+        out = out_dir / "recon3_결과.json"
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=1)
+        browser.close()
+    print(f"\n조사 결과를 저장했습니다: {out}")
+    print("미리보기 HTML 은 PC 에만 두시고, recon3_결과.json 만 Claude에게 보내 주세요.")
