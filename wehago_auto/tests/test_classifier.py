@@ -64,3 +64,12 @@ def test_zero_tax_and_suspicious_industry():
 def test_group_by_merchant():
     groups = group_by_merchant([row("(주)비에스케이"), row("( 주 ) 비에스케이"), row("나이스정보통신(주)")])
     assert sorted(len(g) for g in groups.values()) == [1, 2]
+
+
+def test_past_general_history():
+    from collections import Counter
+    hist = {normalize("동네마트"): Counter({"일반": 3, "카과": 1})}
+    d = classify(row("동네마트"), "", RULES, history=hist)
+    assert d.vat_type == "일반" and "과거 전표 일반 3건" in d.reason
+    hist = {normalize("동네마트"): Counter({"일반": 1, "카과": 5})}
+    assert classify(row("동네마트"), "", RULES, history=hist).vat_type == "카과"

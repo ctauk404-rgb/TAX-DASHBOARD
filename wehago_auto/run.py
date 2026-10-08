@@ -56,6 +56,17 @@ def cmd_bulk_recon(args):
     bulk_recon_session(client)
 
 
+def cmd_report(args):
+    import webbrowser
+
+    import store
+    from report import make_report
+
+    html_path, csv_path = make_report(store.load())
+    webbrowser.open(html_path.resolve().as_uri())
+    print(f"현황: {html_path} / {csv_path}")
+
+
 def cmd_plan(args):
     rules, settings = load_rules(), load_settings()
     with open(args.rows, encoding="utf-8-sig", newline="") as f:
@@ -97,6 +108,9 @@ def main():
     p = sub.add_parser("recon5", help="정렬·체크 후 일괄변경 방법 기록")
     p.add_argument("--client", help="수임처 이름")
     p.set_defaults(func=cmd_bulk_recon)
+
+    p = sub.add_parser("report", help="수임처별·거래처별 일반/카과 현황표")
+    p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("plan", help="CSV 로 분류 결과 미리보기")
     p.add_argument("rows")

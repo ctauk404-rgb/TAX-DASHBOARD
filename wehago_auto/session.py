@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright
 
 import codes as codes_mod
+import store
 from classifier import load_rules, load_settings
 from grid import STATUS_PROBE_JS, GridEditor
 from plan import Accounts, build_changes
@@ -51,7 +52,7 @@ class Run:
 
     def open(self):
         self.w.wait_login()
-        self.w.open_card_purchase_list(self.client)
+        self.w.open_card_purchase_list(self.client, load_settings().get("period_from"))
         input("\n카드 매입 내역 표가 화면에 보이면 Enter를 누르세요...")
         for frame in self.w.page.frames:  # 표 객체를 찾아 window.__wehagoAll 에 기억
             try:
@@ -125,8 +126,12 @@ def batches(changes):
     return list(out.values())
 
 
-def run_changes(editor, changes, log_path, client, bulk=True):
-    """변경을 적용한다. bulk 이면 거래처별로 묶어 위하고 [일괄변경] 을 쓴다."""
+FIELD_LABEL = {"ty_mth2": "유형", "cd_acctit_cha": "차변계정"}
+
+
+def run_changes(editor, changes, log_path, client, bulk=True, done=None):
+    """변경을 적용한다. bulk 이면 거래처별로 묶어 위하고 [일괄변경] 을 쓴다.
+    done 을 주면 성공한 건을 {sq: {'유형'|'차변계정': 값}} 로 모은다."""
     ok = fail = streak = 0
     groups = batches(changes) if bulk else [[c] for c in changes]
     for i, group in enumerate(groups, 1):
@@ -145,6 +150,8 @@ def run_changes(editor, changes, log_path, client, bulk=True):
             success, before, after, memo = results[str(c["sq_sbook"])]
             _log(log_path, client, c, c["sq_sbook"], success, before, after, memo)
             good += success
+            if success and done is not None:
+                done.setdefault(str(c["sq_sbook"]), {})[FIELD_LABEL[c["field"]]] = c["후"]
         mark = "✔" if good == len(group) else "✘"
         print(f"  [{i}/{len(groups)}] {mark} {ch['거래처']} · {ch['칸']} {ch['전']} → {ch['후']}"
               f" ({good}/{len(group)}건)")
@@ -166,10 +173,21 @@ def apply_session(client, out_dir="."):
         data = run.data()
         editor = GridEditor(run.w.page)
 
-        # 미리보기
         codes, _ = codes_mod.merge_grid_labels([])
         rows = [codes_mod.to_row(d, codes) for d in data]
-        groups = build_groups(rows, client, rules, settings)
+        st = store.load()
+        store.update(st, client, rows)
+        store.save(st)
+        states = choose_states(rows, settings)
+
+        # 과거(처리된) 전표의 거래처별 유형: 이번 기간 외에 이전 실행에서 쌓인 기록도 포함
+        processed = {r["전표상태코드"] for r in st[client].values()} - states
+        history = store.past_types(st, client, processed)
+        n_general = sum(1 for c in history.values() if c.get("일반", 0) * 2 >= sum(c.values()))
+        print(f"과거 전표 기록: 거래처 {len(history)}곳 (그중 일반 {n_general}곳 → 이번에도 일반)")
+
+        # 미리보기
+        groups = build_groups(rows, client, rules, settings, history)
         report = out_dir / f"미리보기_{client}_{stamp}.html"
         report.write_text(render(client, rows, groups, "코드 표시값 일부 추정"), encoding="utf-8")
         webbrowser.open(report.resolve().as_uri())
@@ -182,15 +200,16 @@ def apply_session(client, out_dir="."):
                         "status_counts": Counter(r["전표상태코드"] for r in rows)},
                        ensure_ascii=False, indent=1), encoding="utf-8")
 
-        states = choose_states(rows, settings)
-        changes, skipped = build_changes(rows, client, rules, settings, run.accounts(data), states)
+        changes, skipped = build_changes(rows, client, rules, settings, run.accounts(data), states, history)
         print(f"\n입력할 변경: {len(changes)}건 "
               f"(유형 {sum(c['field'] == 'ty_mth2' for c in changes)}, "
               f"차변계정 {sum(c['field'] == 'cd_acctit_cha' for c in changes)})")
         print("건너뜀: " + ", ".join(f"{k} {v}건" for k, v in skipped.items()))
         if not changes:
+            finish_report(st)
             input("입력할 것이 없습니다. Enter를 누르면 끝납니다...")
             return
+        done = {}
 
         log_path = out_dir / f"원복_{client}_{stamp}.csv"
         # 유형부터: 유형이 바뀌면 위하고가 계정을 다시 추천할 수 있어서
@@ -203,7 +222,7 @@ def apply_session(client, out_dir="."):
         if not ask_yes(f"\n먼저 거래처 하나만 시험으로 입력해 볼까요? [{t['거래처']} {len(trial)}건 · "
                        f"{t['칸']} {t['전']} → {t['후']}]"):
             return
-        ok, _ = run_changes(editor, trial, log_path, client)
+        ok, _ = run_changes(editor, trial, log_path, client, done=done)
         rest = [c for c in changes if c not in trial]
         if not ok:
             print("시험 입력이 실패했습니다. 화면을 그대로 두고 Claude에게 결과를 알려 주세요.")
@@ -211,11 +230,22 @@ def apply_session(client, out_dir="."):
             return
         print("위하고 화면에서 그 건의 값과 전표상태를 확인해 보세요.")
         if ask_yes(f"나머지 {len(rest)}건도 입력할까요?"):
-            ok2, fail = run_changes(editor, rest, log_path, client)
+            ok2, fail = run_changes(editor, rest, log_path, client, done=done)
             print(f"\n완료: 성공 {ok + ok2}건, 실패 {fail}건. 기록: {log_path}")
+        store.apply_results(st, client, done)
+        store.save(st)
+        finish_report(st)
         print("\n전표전송은 하지 않았습니다. 위하고에서 확인하신 뒤 직접 전송해 주세요.")
         print(f"되돌리려면: undo.bat {log_path.name}")
         input("이 창에서 확인을 마치셨으면 Enter를 누르세요 (브라우저가 닫힙니다)...")
+
+
+def finish_report(st):
+    from report import make_report
+
+    html_path, csv_path = make_report(st)
+    webbrowser.open(html_path.resolve().as_uri())
+    print(f"\n수임처별·거래처별 일반/카과 현황: {html_path} (엑셀용 {csv_path.name})")
 
 
 def undo_session(log_file, out_dir="."):

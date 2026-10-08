@@ -17,6 +17,8 @@ DEFAULT_SETTINGS = {
     "type_codes": {"카과": "57", "일반": "3"},
     # 자동 입력할 전표상태 코드 (비어 있으면 실행할 때 물어봄)
     "editable_states": [],
+    # 조회 기간 시작일 (MM.DD 는 올해, YYYY.MM.DD 도 가능). 상반기 전표를 함께 읽어 과거 판단에 씀
+    "period_from": "01.01",
     # 매입세액 공제 받는 카드 매입의 유형 (더존 매입매출 유형 '카과')
     "deductible_type": "카과",
     # 공제 받지 않는 경우의 유형
@@ -111,12 +113,23 @@ def load_settings(path=BASE_DIR / "settings.json"):
     return settings
 
 
+def past_general(history, row):
+    """같은 거래처의 과거(처리된) 전표가 주로 '일반' 이면 그 건수, 아니면 0."""
+    if not history:
+        return 0
+    counts = history.get(normalize(row.get("거래처")))
+    if not counts:
+        return 0
+    general = counts.get(DEFAULT_SETTINGS["non_deductible_type"], 0)
+    return general if general * 2 >= sum(counts.values()) else 0
+
+
 def find_rule(client, row, rules):
     hits = [r for r in rules if r.matches(client, row)]
     return min(hits, key=lambda r: r.rank) if hits else None
 
 
-def classify(row, client, rules, settings=DEFAULT_SETTINGS):
+def classify(row, client, rules, settings=DEFAULT_SETTINGS, history=None):
     """위하고 표의 한 줄을 분류한다.
 
     row 키: 거래처, 구분, 업태, 종목, 공급가액, 세액, 차변계정, 유형, 전표상태
@@ -149,6 +162,9 @@ def classify(row, client, rules, settings=DEFAULT_SETTINGS):
         reasons.append(f"{kind} 가맹점")
     elif rule and rule.vat_type:
         vat_type = rule.vat_type
+    elif past_general(history, row):
+        vat_type = general
+        reasons.append(f"과거 전표 일반 {past_general(history, row)}건")
     elif any(a in account for a in settings["non_deductible_accounts"]):
         vat_type = general
         reasons.append("불공제 계정")

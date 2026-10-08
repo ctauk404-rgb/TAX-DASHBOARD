@@ -221,18 +221,29 @@ class GridEditor:
         buttons[-1].click()
 
     def _confirm_dialogs(self, wait_ms=2500):
-        """일괄변경 후 뜨는 확인 창들을 [확인] 으로 닫는다. 닫은 횟수를 돌려준다."""
-        clicked, deadline = 0, time.time() + wait_ms / 1000
-        while time.time() < deadline and clicked < 3:
+        """일괄변경 후 뜨는 확인 창들을 닫는다. 닫은 횟수를 돌려준다.
+
+        두 번째 창은 [확인] 클릭으로 안 닫히고 Enter 를 눌러야 넘어가는 경우가 있어서
+        클릭 뒤에도 창이 남아 있으면 Enter 를 누른다.
+        """
+        closed, deadline = 0, time.time() + wait_ms / 1000
+        while time.time() < deadline and closed < 4:
             buttons = self._visible_buttons("확인")
-            if buttons:
-                buttons[-1].click()
-                clicked += 1
-                self.page.wait_for_timeout(600)
-                deadline = time.time() + 1.5
-            else:
+            if not buttons:
                 self.page.wait_for_timeout(200)
-        return clicked
+                continue
+            before = len(buttons)
+            try:
+                buttons[-1].click(timeout=2000)
+            except Exception:
+                pass
+            self.page.wait_for_timeout(500)
+            if len(self._visible_buttons("확인")) >= before:
+                self.page.keyboard.press("Enter")
+                self.page.wait_for_timeout(500)
+            closed += 1
+            deadline = time.time() + 2  # 다음 창이 늦게 뜰 수 있음
+        return closed
 
     def bulk_edit(self, sqs, field, typed, expect):
         """sqs 건들의 field 를 한 번에 expect 로 바꾼다.
@@ -280,6 +291,7 @@ class GridEditor:
             while time.time() < deadline and not batch:
                 self.page.wait_for_timeout(300)
             self.page.wait_for_timeout(1500)  # 위하고가 바뀐 줄을 다시 불러오는 시간
+            self._confirm_dialogs(wait_ms=1500)  # 저장 뒤에 뜨는 완료 창
         finally:
             self.page.remove_listener("response", on_response)
 

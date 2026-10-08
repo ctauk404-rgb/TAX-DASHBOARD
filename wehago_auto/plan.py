@@ -35,7 +35,7 @@ class Accounts:
         return hits[0] if len(hits) == 1 else None
 
 
-def build_changes(rows, client, rules, settings, accounts, states):
+def build_changes(rows, client, rules, settings, accounts, states, history=None):
     """rows: codes.to_row 결과. states: 자동 입력할 전표상태 코드 집합.
 
     돌려주는 값: (변경 목록, 건너뛴 사유별 건수)
@@ -49,7 +49,7 @@ def build_changes(rows, client, rules, settings, accounts, states):
         if r["전표상태코드"] not in states:
             skip("전표상태 제외")
             continue
-        d = classify(r, client, rules, settings)
+        d = classify(r, client, rules, settings, history)
         if d.review:
             skip("검토 필요")
             continue

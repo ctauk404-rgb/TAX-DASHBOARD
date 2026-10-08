@@ -1,4 +1,6 @@
 recon*_*.json
 미리보기_*.html
+현황_*.*
 원복*.csv
+data/
 __pycache__/

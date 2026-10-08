@@ -11,10 +11,10 @@ def _e(v):
     return html.escape(str(v if v is not None else ""))
 
 
-def build_groups(rows, client, rules, settings):
+def build_groups(rows, client, rules, settings, history=None):
     groups = []
     for items in group_by_merchant(rows).values():
-        decisions = [classify(r, client, rules, settings) for r in items]
+        decisions = [classify(r, client, rules, settings, history) for r in items]
         first = items[0]
         proposed_types = Counter(d.vat_type for d in decisions)
         proposed_accounts = Counter(d.account or "(미정)" for d in decisions)
