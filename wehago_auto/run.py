@@ -4,6 +4,7 @@
   python run.py recon2 --client 팔각도     표 구조·저장 방식 조사 (한 건 수정 후 원복)
   python run.py preview --client 팔각도    분류 미리보기 (위하고에 쓰지 않음) + 3차 조사
   python run.py apply --client 팔각도      미리보기 → 1건 시험 → 유형·차변계정 자동 입력
+  python run.py batch                    수임처목록.txt 의 수임처를 차례대로 처리
   python run.py undo 원복_팔각도_xxx.csv   자동 입력한 값을 되돌리기
   python run.py plan rows.csv --client 팔각도   표 데이터(CSV)로 분류 결과 미리보기 (개발·점검용)
 """
@@ -54,6 +55,14 @@ def cmd_bulk_recon(args):
 
     client = args.client or input("작업할 수임처 이름: ").strip()
     bulk_recon_session(client)
+
+
+def cmd_batch(args):
+    from session import batch_session, read_clients
+
+    clients = args.clients or read_clients(args.file)
+    if clients:
+        batch_session(clients)
 
 
 def cmd_report(args):
@@ -108,6 +117,11 @@ def main():
     p = sub.add_parser("recon5", help="정렬·체크 후 일괄변경 방법 기록")
     p.add_argument("--client", help="수임처 이름")
     p.set_defaults(func=cmd_bulk_recon)
+
+    p = sub.add_parser("batch", help="여러 수임처를 한 번에 처리")
+    p.add_argument("clients", nargs="*", help="수임처 이름들 (없으면 수임처목록.txt)")
+    p.add_argument("--file", default="수임처목록.txt")
+    p.set_defaults(func=cmd_batch)
 
     p = sub.add_parser("report", help="수임처별·거래처별 일반/카과 현황표")
     p.set_defaults(func=cmd_report)

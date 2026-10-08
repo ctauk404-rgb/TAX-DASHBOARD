@@ -7,6 +7,7 @@
 
 import csv
 import json
+import time
 import webbrowser
 from collections import Counter
 from datetime import datetime
@@ -18,10 +19,10 @@ from playwright.sync_api import sync_playwright
 import codes as codes_mod
 import store
 from classifier import load_rules, load_settings
-from grid import STATUS_PROBE_JS, GridEditor
+from grid import HAS_MAIN_JS, STATUS_PROBE_JS, GridEditor
 from plan import Accounts, build_changes
 from preview import build_groups, render
-from wehago import _GRID_JS, CARD_LIST_PATH, GRID_HOOK_JS, Wehago, launch
+from wehago import _GRID_JS, CARD_LIST_PATH, GRID_HOOK_JS, SkipClient, Wehago, launch
 
 ACCOUNT_HELP_PATH = "/smarta/codehelp/acctcd/"
 LOG_FIELDS = ["시각", "수임처", "sq_sbook", "거래처", "field", "칸", "입력 전", "입력 후", "결과", "메모"]
@@ -32,9 +33,9 @@ def ask_yes(question):
 
 
 class Run:
-    """브라우저를 열고, 로그인 후 카드 매입 목록까지 연다."""
+    """브라우저를 열고, 로그인 후 수임처별 카드 매입 목록을 연다."""
 
-    def __init__(self, p, client):
+    def __init__(self, p, client=None):
         self.client = client
         self.browser = launch(p)
         self.context = self.browser.new_context(viewport={"width": 1600, "height": 900})
@@ -42,6 +43,7 @@ class Run:
         self.lists, self.account_help = [], []
         self.context.on("response", self._on_response)
         self.w = Wehago(self.context)
+        self.home = None
 
     def _on_response(self, r):
         path = urlsplit(r.url).path
@@ -50,15 +52,60 @@ class Run:
         elif path == ACCOUNT_HELP_PATH:
             self.account_help.append(r)
 
-    def open(self):
+    def login(self):
         self.w.wait_login()
-        self.w.open_card_purchase_list(self.client, load_settings().get("period_from"))
-        input("\n카드 매입 내역 표가 화면에 보이면 Enter를 누르세요...")
+        self.home = (self.w.page, self.w.page.url)  # 수임처 목록 화면
+
+    def back_home(self):
+        """다음 수임처를 위해 수임처 목록 화면으로 돌아간다."""
+        page, url = self.home
+        for other in list(self.context.pages):
+            if other is not page:
+                try:
+                    other.close()
+                except Exception:
+                    pass
+        self.w.page = page
+        if page.url != url:
+            page.goto(url)
+        page.wait_for_timeout(1500)
+
+    def open_client(self, client, ask=True):
+        """수임처의 카드 매입 목록을 열고 표가 뜰 때까지 기다린다."""
+        self.client = client
+        self.lists.clear()
+        self.w.log = []
+        self.w.open_card_purchase_list(client, load_settings().get("period_from"))
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if self.lists and (self._grid_ready() or self._list_empty()):
+                return
+            self.w.page.wait_for_timeout(500)
+        if ask:
+            input("\n카드 매입 내역 표가 화면에 보이면 Enter를 누르세요...")
+        if not self._grid_ready() and not self._list_empty():
+            raise RuntimeError("카드 매입 표를 찾지 못했습니다")
+
+    def _list_empty(self):
+        """조회는 됐는데 카드 매입 내역이 0건인 경우."""
+        try:
+            return bool(self.lists) and not self.lists[-1].json().get("data")
+        except Exception:
+            return False
+
+    def _grid_ready(self):
+        ready = False
         for frame in self.w.page.frames:  # 표 객체를 찾아 window.__wehagoAll 에 기억
             try:
                 frame.evaluate(_GRID_JS)
+                ready = ready or frame.evaluate(HAS_MAIN_JS)
             except Exception:
                 pass
+        return ready
+
+    def open(self):
+        self.login()
+        self.open_client(self.client)
 
     def data(self):
         for _ in range(2):
@@ -163,6 +210,60 @@ def run_changes(editor, changes, log_path, client, bulk=True, done=None):
     return ok, fail
 
 
+def prepare(run, client, settings, rules, out_dir, stamp, states=None, open_preview=True):
+    """목록 읽기 → 기록 저장 → 과거 판단 → 미리보기 → 변경 목록."""
+    data = run.data()
+    codes, _ = codes_mod.merge_grid_labels([])
+    rows = [codes_mod.to_row(d, codes) for d in data]
+    st = store.load()
+    store.update(st, client, rows)
+    store.save(st)
+    if states is None:
+        states = choose_states(rows, settings)
+
+    # 과거(처리된) 전표의 거래처별 유형: 이번 기간 외에 이전 실행에서 쌓인 기록도 포함
+    processed = {r["전표상태코드"] for r in st[client].values()} - states
+    history = store.past_types(st, client, processed)
+    n_general = sum(1 for c in history.values() if c.get("일반", 0) * 2 >= sum(c.values()))
+    print(f"과거 전표 기록: 거래처 {len(history)}곳 (그중 일반 {n_general}곳 → 이번에도 일반)")
+
+    groups = build_groups(rows, client, rules, settings, history)
+    preview_path = Path(out_dir) / f"미리보기_{client}_{stamp}.html"
+    preview_path.write_text(render(client, rows, groups, "코드 표시값 일부 추정"), encoding="utf-8")
+    if open_preview:
+        webbrowser.open(preview_path.resolve().as_uri())
+    print(f"미리보기: {preview_path}")
+
+    changes, skipped = build_changes(rows, client, rules, settings, run.accounts(data), states, history)
+    # 유형부터: 유형이 바뀌면 위하고가 계정을 다시 추천할 수 있어서
+    changes.sort(key=lambda c: (c["field"] != "ty_mth2", str(c["sq_sbook"])))
+    print(f"입력할 변경: {len(changes)}건 "
+          f"(유형 {sum(c['field'] == 'ty_mth2' for c in changes)}, "
+          f"차변계정 {sum(c['field'] == 'cd_acctit_cha' for c in changes)})")
+    print("건너뜀: " + (", ".join(f"{k} {v}건" for k, v in skipped.items()) or "없음"))
+    return st, rows, states, changes, skipped
+
+
+def trial_and_rest(editor, changes, log_path, client, done, ask_rest=True):
+    """거래처 하나로 시험 → (확인 후) 나머지. 돌려주는 값: (성공, 실패, 계속 진행 여부)"""
+    groups = batches(changes)
+    trial = next((g for g in groups if len(g) >= 2), groups[0])
+    t = trial[0]
+    if not ask_yes(f"\n먼저 거래처 하나만 시험으로 입력해 볼까요? [{client} · {t['거래처']} {len(trial)}건 · "
+                   f"{t['칸']} {t['전']} → {t['후']}]"):
+        return 0, 0, False
+    ok, fail = run_changes(editor, trial, log_path, client, done=done)
+    if not ok:
+        print("시험 입력이 실패했습니다. 화면을 그대로 두고 Claude에게 결과를 알려 주세요.")
+        return ok, fail, False
+    print("위하고 화면에서 그 거래처의 값과 전표상태를 확인해 보세요.")
+    rest = [c for c in changes if c not in trial]
+    if ask_rest and not ask_yes(f"나머지 {len(rest)}건도 입력할까요?"):
+        return ok, fail, False
+    ok2, fail2 = run_changes(editor, rest, log_path, client, done=done)
+    return ok + ok2, fail + fail2, True
+
+
 def apply_session(client, out_dir="."):
     out_dir = Path(out_dir)
     settings, rules = load_settings(), load_rules()
@@ -170,28 +271,8 @@ def apply_session(client, out_dir="."):
     with sync_playwright() as p:
         run = Run(p, client)
         run.open()
-        data = run.data()
         editor = GridEditor(run.w.page)
-
-        codes, _ = codes_mod.merge_grid_labels([])
-        rows = [codes_mod.to_row(d, codes) for d in data]
-        st = store.load()
-        store.update(st, client, rows)
-        store.save(st)
-        states = choose_states(rows, settings)
-
-        # 과거(처리된) 전표의 거래처별 유형: 이번 기간 외에 이전 실행에서 쌓인 기록도 포함
-        processed = {r["전표상태코드"] for r in st[client].values()} - states
-        history = store.past_types(st, client, processed)
-        n_general = sum(1 for c in history.values() if c.get("일반", 0) * 2 >= sum(c.values()))
-        print(f"과거 전표 기록: 거래처 {len(history)}곳 (그중 일반 {n_general}곳 → 이번에도 일반)")
-
-        # 미리보기
-        groups = build_groups(rows, client, rules, settings, history)
-        report = out_dir / f"미리보기_{client}_{stamp}.html"
-        report.write_text(render(client, rows, groups, "코드 표시값 일부 추정"), encoding="utf-8")
-        webbrowser.open(report.resolve().as_uri())
-        print(f"\n미리보기를 열었습니다: {report}")
+        st, rows, states, changes, _ = prepare(run, client, settings, rules, out_dir, stamp)
 
         # 전표상태 조사 (다음 개선용, 글자 표시 방식만 기록)
         probe = editor.frame.evaluate(STATUS_PROBE_JS)
@@ -200,44 +281,116 @@ def apply_session(client, out_dir="."):
                         "status_counts": Counter(r["전표상태코드"] for r in rows)},
                        ensure_ascii=False, indent=1), encoding="utf-8")
 
-        changes, skipped = build_changes(rows, client, rules, settings, run.accounts(data), states, history)
-        print(f"\n입력할 변경: {len(changes)}건 "
-              f"(유형 {sum(c['field'] == 'ty_mth2' for c in changes)}, "
-              f"차변계정 {sum(c['field'] == 'cd_acctit_cha' for c in changes)})")
-        print("건너뜀: " + ", ".join(f"{k} {v}건" for k, v in skipped.items()))
         if not changes:
             finish_report(st)
             input("입력할 것이 없습니다. Enter를 누르면 끝납니다...")
             return
         done = {}
-
         log_path = out_dir / f"원복_{client}_{stamp}.csv"
-        # 유형부터: 유형이 바뀌면 위하고가 계정을 다시 추천할 수 있어서
-        changes.sort(key=lambda c: (c["field"] != "ty_mth2", str(c["sq_sbook"])))
         editor.sort_by_merchant()  # 화면 '거래처' 머리글 클릭과 같은 정렬
-        groups = batches(changes)
-        # 시험: 2건 이상인 거래처 하나로 일괄변경까지 확인
-        trial = next((g for g in groups if len(g) >= 2), groups[0])
-        t = trial[0]
-        if not ask_yes(f"\n먼저 거래처 하나만 시험으로 입력해 볼까요? [{t['거래처']} {len(trial)}건 · "
-                       f"{t['칸']} {t['전']} → {t['후']}]"):
-            return
-        ok, _ = run_changes(editor, trial, log_path, client, done=done)
-        rest = [c for c in changes if c not in trial]
-        if not ok:
-            print("시험 입력이 실패했습니다. 화면을 그대로 두고 Claude에게 결과를 알려 주세요.")
-            input("Enter를 누르면 끝납니다...")
-            return
-        print("위하고 화면에서 그 건의 값과 전표상태를 확인해 보세요.")
-        if ask_yes(f"나머지 {len(rest)}건도 입력할까요?"):
-            ok2, fail = run_changes(editor, rest, log_path, client, done=done)
-            print(f"\n완료: 성공 {ok + ok2}건, 실패 {fail}건. 기록: {log_path}")
+        ok, fail, _ = trial_and_rest(editor, changes, log_path, client, done)
+        print(f"\n완료: 성공 {ok}건, 실패 {fail}건. 기록: {log_path}")
         store.apply_results(st, client, done)
         store.save(st)
         finish_report(st)
         print("\n전표전송은 하지 않았습니다. 위하고에서 확인하신 뒤 직접 전송해 주세요.")
         print(f"되돌리려면: undo.bat {log_path.name}")
         input("이 창에서 확인을 마치셨으면 Enter를 누르세요 (브라우저가 닫힙니다)...")
+
+
+def read_clients(path="수임처목록.txt"):
+    path = Path(path)
+    if path.exists():
+        names = [l.strip() for l in path.read_text(encoding="utf-8-sig").splitlines()]
+        names = [n for n in names if n and not n.startswith("#")]
+        if names:
+            return names
+    typed = input("처리할 수임처 이름을 쉼표로 입력하세요 (예: 팔각도, 글로벌에스에이치): ")
+    return [n.strip() for n in typed.split(",") if n.strip()]
+
+
+BATCH_FIELDS = ["수임처", "결과", "전체 건수", "입력할 변경", "성공", "실패", "건너뜀", "원복 파일", "메모"]
+
+
+def batch_session(clients, out_dir="."):
+    """여러 수임처를 한 번 로그인으로 차례대로 처리한다.
+
+    - 자동 입력할 전표상태는 첫 수임처에서 한 번만 고른다 (settings.json 에 있으면 그대로)
+    - 시험(거래처 하나)은 처음 변경이 있는 수임처에서 한 번만 하고, 그 뒤는 자동으로 진행
+    - 수임처 하나가 실패해도 기록하고 다음 수임처로 넘어간다
+    """
+    out_dir = Path(out_dir)
+    settings, rules = load_settings(), load_rules()
+    stamp = datetime.now().strftime("%Y%m%d_%H%M")
+    summary_path = out_dir / f"일괄처리결과_{stamp}.csv"
+    states = {str(s) for s in settings.get("editable_states") or []} or None
+    trial_done = False
+    print(f"처리할 수임처 {len(clients)}곳: {', '.join(clients)}")
+
+    with sync_playwright() as p:
+        run = Run(p)
+        run.login()
+        for n, client in enumerate(clients, 1):
+            print(f"\n{'=' * 60}\n[{n}/{len(clients)}] {client}\n{'=' * 60}")
+            row = {"수임처": client, "결과": "", "전체 건수": "", "입력할 변경": "", "성공": 0, "실패": 0,
+                   "건너뜀": "", "원복 파일": "", "메모": ""}
+            try:
+                run.open_client(client)
+                st, rows, states, changes, skipped = prepare(
+                    run, client, settings, rules, out_dir, stamp, states, open_preview=False)
+                row.update({"전체 건수": len(rows), "입력할 변경": len(changes),
+                            "건너뜀": ", ".join(f"{k} {v}" for k, v in skipped.items())})
+                if changes:
+                    done = {}
+                    log_path = out_dir / f"원복_{client}_{stamp}.csv"
+                    row["원복 파일"] = log_path.name
+                    editor = GridEditor(run.w.page)
+                    editor.sort_by_merchant()
+                    if not trial_done:
+                        ok, fail, go = trial_and_rest(editor, changes, log_path, client, done,
+                                                      ask_rest=True)
+                        trial_done = go
+                        if not go:
+                            row.update({"성공": ok, "실패": fail, "결과": "중단"})
+                            store.apply_results(st, client, done)
+                            store.save(st)
+                            _write_row(summary_path, row)
+                            print("시험 단계에서 멈췄습니다. 남은 수임처는 처리하지 않습니다.")
+                            break
+                    else:
+                        ok, fail = run_changes(editor, changes, log_path, client, done=done)
+                    store.apply_results(st, client, done)
+                    store.save(st)
+                    row.update({"성공": ok, "실패": fail})
+                row["결과"] = "완료" if not row["실패"] else "일부 실패"
+            except SkipClient as e:
+                row.update({"결과": "건너뜀", "메모": str(e)})
+            except Exception as e:
+                row.update({"결과": "오류", "메모": f"{type(e).__name__}: {e}"})
+                print(f"  오류로 이 수임처는 넘어갑니다: {e}")
+            _write_row(summary_path, row)
+            print(f"  → {row['결과']} (성공 {row['성공']}, 실패 {row['실패']})")
+            if n < len(clients):
+                try:
+                    run.back_home()
+                except Exception as e:
+                    input(f"수임처 목록 화면으로 돌아가지 못했습니다 ({e}). 직접 수임처 목록을 열고 Enter...")
+                    run.w.page = run.context.pages[-1]
+                    run.home = (run.w.page, run.w.page.url)
+
+        finish_report(store.load())
+        print(f"\n수임처별 결과: {summary_path}")
+        print("전표전송은 하지 않았습니다. 수임처별로 확인하신 뒤 직접 전송해 주세요.")
+        input("Enter를 누르면 브라우저가 닫힙니다...")
+
+
+def _write_row(path, row):
+    new = not path.exists()
+    with open(path, "a", encoding="utf-8-sig", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=BATCH_FIELDS)
+        if new:
+            w.writeheader()
+        w.writerow(row)
 
 
 def finish_report(st):

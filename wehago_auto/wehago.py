@@ -27,6 +27,10 @@ def launch(p):
     raise RuntimeError("Edge 또는 Chrome 브라우저를 찾지 못했습니다.")
 
 
+class SkipClient(Exception):
+    """사용자가 이 수임처를 건너뛰기로 함 (여러 수임처 처리 중)."""
+
+
 class Wehago:
     def __init__(self, context):
         self.context = context
@@ -72,7 +76,11 @@ class Wehago:
             self.log.append({"단계": title, "결과": "자동 완료"})
         except Exception as e:
             print(f"  → 자동 실행 실패 ({e})")
-            input(f"  위하고 화면에서 직접 '{title}' 을(를) 해 주시고 Enter를 누르세요...")
+            answer = input(f"  위하고 화면에서 직접 '{title}' 을(를) 해 주시고 Enter를 누르세요"
+                           " (이 수임처를 건너뛰려면 s 입력)... ")
+            if answer.strip().lower() in ("s", "ㄴ"):
+                self.log.append({"단계": title, "결과": "건너뜀"})
+                raise SkipClient(title)
             self.page = self.context.pages[-1]
             self.log.append({"단계": title, "결과": f"수동 처리 ({type(e).__name__}: {e})"})
 
