@@ -16,15 +16,29 @@ WEHAGO_URL = "https://www.wehago.com/"
 FORBIDDEN_WORDS = ("전송", "삭제", "마감", "취소")
 
 
+BROWSER_CHANNELS = {"chrome": "chrome", "크롬": "chrome", "edge": "msedge", "엣지": "msedge", "msedge": "msedge"}
+
+
 def launch(p):
-    """PC에 이미 설치된 Edge → Chrome 순으로 띄운다 (브라우저 추가 설치 불필요)."""
-    for channel in ("msedge", "chrome", None):
+    """PC에 이미 설치된 브라우저를 최대화해서 띄운다 (추가 설치 불필요).
+
+    settings.json 의 "browser" ("chrome" 또는 "edge") 를 먼저 쓰고, 없으면 다른 쪽을 쓴다.
+    """
+    from classifier import load_settings
+
+    first = BROWSER_CHANNELS.get(str(load_settings().get("browser", "chrome")).lower(), "chrome")
+    order = [first] + [c for c in ("chrome", "msedge") if c != first] + [None]
+    for channel in order:
         try:
-            browser = p.chromium.launch(channel=channel, headless=False)
-            return browser
+            return p.chromium.launch(channel=channel, headless=False, args=["--start-maximized"])
         except Exception:
             continue
-    raise RuntimeError("Edge 또는 Chrome 브라우저를 찾지 못했습니다.")
+    raise RuntimeError("Chrome 또는 Edge 브라우저를 찾지 못했습니다.")
+
+
+def new_context(browser):
+    """화면 크기를 고정하지 않고 실제 창 크기(최대화)에 맞춘다. 윈도우 배율(125% 등)도 그대로 따른다."""
+    return browser.new_context(no_viewport=True)
 
 
 class SkipClient(Exception):
@@ -247,7 +261,7 @@ def recon(client, out_path):
 
     with sync_playwright() as p:
         browser = launch(p)
-        context = browser.new_context(viewport={"width": 1600, "height": 900})
+        context = new_context(browser)
         responses = []
         context.on("response", lambda r: responses.append(r)
                    if r.request.resource_type in ("xhr", "fetch") else None)
@@ -477,7 +491,7 @@ def recon2(client, out_path):
 
     with sync_playwright() as p:
         browser = launch(p)
-        context = browser.new_context(viewport={"width": 1600, "height": 900})
+        context = new_context(browser)
         lists = []
         context.on("response", lambda r: lists.append(r)
                    if urlsplit(r.url).path == CARD_LIST_PATH and r.request.method == "POST" else None)
@@ -537,7 +551,7 @@ def preview_session(client, out_dir="."):
     out_dir = Path(out_dir)
     with sync_playwright() as p:
         browser = launch(p)
-        context = browser.new_context(viewport={"width": 1600, "height": 900})
+        context = new_context(browser)
         context.add_init_script(GRID_HOOK_JS)
         lists = []
         context.on("response", lambda r: lists.append(r)

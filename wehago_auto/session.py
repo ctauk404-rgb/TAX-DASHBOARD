@@ -22,7 +22,7 @@ from classifier import load_rules, load_settings
 from grid import HAS_MAIN_JS, STATUS_PROBE_JS, GridEditor
 from plan import Accounts, build_changes
 from preview import build_groups, render
-from wehago import _GRID_JS, CARD_LIST_PATH, GRID_HOOK_JS, SkipClient, Wehago, launch
+from wehago import _GRID_JS, CARD_LIST_PATH, GRID_HOOK_JS, SkipClient, Wehago, launch, new_context
 
 ACCOUNT_HELP_PATH = "/smarta/codehelp/acctcd/"
 LOG_FIELDS = ["시각", "수임처", "sq_sbook", "거래처", "field", "칸", "입력 전", "입력 후", "결과", "메모"]
@@ -38,7 +38,7 @@ class Run:
     def __init__(self, p, client=None):
         self.client = client
         self.browser = launch(p)
-        self.context = self.browser.new_context(viewport={"width": 1600, "height": 900})
+        self.context = new_context(self.browser)
         self.context.add_init_script(GRID_HOOK_JS)
         self.lists, self.account_help = [], []
         self.context.on("response", self._on_response)

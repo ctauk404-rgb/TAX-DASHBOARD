@@ -19,6 +19,8 @@ DEFAULT_SETTINGS = {
     "editable_states": [],
     # 조회 기간 시작일 (MM.DD 는 올해, YYYY.MM.DD 도 가능). 상반기 전표를 함께 읽어 과거 판단에 씀
     "period_from": "01.01",
+    # 자동화에 쓸 브라우저: "chrome" 또는 "edge"
+    "browser": "chrome",
     # 매입세액 공제 받는 카드 매입의 유형 (더존 매입매출 유형 '카과')
     "deductible_type": "카과",
     # 공제 받지 않는 경우의 유형

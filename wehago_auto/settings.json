@@ -25,5 +25,6 @@
     "이발",
     "미용"
   ],
-  "period_from": "01.01"
+  "period_from": "01.01",
+  "browser": "chrome"
 }
