@@ -205,3 +205,72 @@ def undo_session(log_file, out_dir="."):
         ok, fail = run_changes(editor, changes, out, client)
         print(f"\n되돌리기 완료: 성공 {ok}건, 실패 {fail}건. 기록: {out}")
         input("Enter를 누르면 브라우저가 닫힙니다...")
+
+
+def bulk_recon_session(client, out_dir="."):
+    """정렬 + 같은 거래처 체크까지 프로그램이 하고, 일괄변경은 사용자가 직접 하면서 기록한다."""
+    from classifier import normalize
+    from grid import ACTION_LOG_JS
+    from wehago import body_shape, diff_snapshots, _SNAPSHOT_JS, SNAPSHOT_FIELDS
+
+    out_dir = Path(out_dir)
+    result = {}
+    with sync_playwright() as p:
+        run = Run(p, client)
+        run.context.add_init_script(ACTION_LOG_JS)
+        run.open()
+        data = run.data()
+        editor = GridEditor(run.w.page)
+
+        try:
+            editor.sort_by_merchant()
+            result["sort"] = "ok"
+        except Exception as e:
+            result["sort"] = f"error: {e}"
+        result["sort_ok_by_user"] = ask_yes("\n표가 거래처 이름순으로 정렬되었나요?")
+
+        # 같은 거래처가 2건 이상이고 아직 전송 전으로 보이는 거래처 하나를 고른다
+        groups = {}
+        for d in data:
+            groups.setdefault(normalize(d.get("nm_trade")), []).append(d)
+        candidates = sorted((g for g in groups.values() if len(g) >= 2), key=len)
+        target = candidates[len(candidates) // 2] if candidates else []
+        if target:
+            name = target[0].get("nm_trade")
+            try:
+                result["check"] = editor.check([d["sq_sbook"] for d in target])
+            except Exception as e:
+                result["check"] = f"error: {e}"
+            print(f"\n'{name}' {len(target)}건을 체크해 두었습니다 (화면에서 그 거래처 위치로 이동).")
+            result["check_ok_by_user"] = ask_yes("왼쪽 체크칸에 그 거래처 줄들이 모두 체크되었나요?")
+
+        sent = []
+        run.context.on("request", lambda r: sent.append(r) if r.resource_type in ("xhr", "fetch") else None)
+        before = [s for f in run.w.page.frames for s in _safe(f, _SNAPSHOT_JS, SNAPSHOT_FIELDS)]
+        for f in run.w.page.frames:
+            _safe(f, "() => { window.__wehagoRecording = true; window.__wehagoTrace = {}; }")
+        print("\n이제 평소 하시는 대로 [일괄변경] 을 해 주세요.")
+        print("  - 체크가 안 됐으면 직접 같은 거래처 줄들을 체크하셔도 됩니다")
+        print("  - 실제로 맞는 값으로 바꾸시면 됩니다 (전표전송은 누르지 마세요)")
+        input("일괄변경이 끝나면 Enter를 누르세요...")
+        after = [s for f in run.w.page.frames for s in _safe(f, _SNAPSHOT_JS, SNAPSHOT_FIELDS)]
+        result["actions"] = [a for f in run.w.page.frames for a in _safe(f, "() => window.__wehagoActions || []")]
+        result["trace"] = [t for f in run.w.page.frames for t in [_safe(f, "() => window.__wehagoTrace", None)] if t]
+        result["requests"] = [{"method": r.method, "path": urlsplit(r.url).path,
+                               "body": body_shape(r) if r.method != "GET" else None}
+                              for r in sent if "/collect" not in r.url and "lpevent" not in r.url][:60]
+        result["changed"] = diff_snapshots(before, after)
+        result["how_by_user"] = input("\n일괄변경을 어떻게 하셨는지 한 줄로 적어 주세요 (예: 상단 일괄변경 버튼 → 유형 선택 → 확인): ")
+
+        out = out_dir / "recon5_결과.json"
+        out.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+        run.browser.close()
+    print(f"\n조사 결과를 저장했습니다: {out}  — 이 파일을 Claude에게 보내 주세요.")
+
+
+def _safe(frame, js, arg=None, default=()):
+    try:
+        out = frame.evaluate(js, arg) if arg is not None else frame.evaluate(js)
+        return out if out is not None else default
+    except Exception:
+        return default

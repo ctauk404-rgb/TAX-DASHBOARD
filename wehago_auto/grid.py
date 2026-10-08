@@ -59,6 +59,61 @@ STATUS_PROBE_JS = "() => {" + _MAIN + """
 }"""
 
 
+# 화면 '거래처' 머리글을 누른 것과 같은 정렬
+SORT_JS = "() => {" + _MAIN + """
+  const g = __main();
+  try { g.orderBy(['nm_trade'], ['ascending']); } catch (e) { g.orderBy(['nm_trade']); }
+  return true;
+}"""
+
+# 왼쪽 체크칸: 모두 해제한 뒤 sq_sbook 목록의 줄만 체크
+CHECK_JS = "(sqs) => {" + _MAIN + """
+  const g = __main(), ds = g.getDataSource(), want = new Set(sqs.map(String)), items = [];
+  for (let r = 0, n = ds.getRowCount(); r < n; r++) {
+    if (want.has(String(ds.getValue(r, 'sq_sbook')))) items.push(g.getItemIndex(r));
+  }
+  try { g.checkAll(false, false, false, true); } catch (e) { try { g.checkAll(false); } catch (e2) {} }
+  try { g.checkItems(items, true, true); }
+  catch (e) { for (const i of items) g.checkItem(i, true, false, true); }
+  if (items.length) g.setCurrent({itemIndex: Math.min(...items), column: 'nm_trade'});
+  return {wanted: items.length, checked: (g.getCheckedItems() || []).length};
+}"""
+
+# 사용자가 화면에서 누른 버튼·글자와 뜬 창을 기록 (일괄변경 방법 조사용).
+# 짧은 글자(버튼 이름 등)만 남기고 숫자는 가린다.
+ACTION_LOG_JS = r"""
+(() => {
+  if (window.__wehagoActions) return;
+  window.__wehagoActions = [];
+  const text = el => {
+    const t = (el && (el.innerText || el.value || el.title || '') || '').trim().replace(/\d/g, '#');
+    return t.length <= 30 ? t : t.slice(0, 30) + '…';
+  };
+  const desc = el => el ? `${el.tagName.toLowerCase()}.${String(el.className || '').split(/\s+/).slice(0, 3).join('.')}` : '';
+  document.addEventListener('click', e => {
+    if (!window.__wehagoRecording) return;
+    const btn = e.target.closest('button, a, li, [role=button], [role=menuitem], label, span') || e.target;
+    window.__wehagoActions.push({type: 'click', el: desc(btn), text: text(btn)});
+  }, true);
+  document.addEventListener('keydown', e => {
+    if (!window.__wehagoRecording) return;
+    window.__wehagoActions.push({type: 'key', key: e.key.length === 1 ? (/\d/.test(e.key) ? '#' : '*') : e.key,
+                                 ctrl: e.ctrlKey, shift: e.shiftKey});
+  }, true);
+  new MutationObserver(ms => {
+    if (!window.__wehagoRecording) return;
+    for (const m of ms) for (const n of m.addedNodes) {
+      if (n.nodeType !== 1) continue;
+      const cls = String(n.className || '');
+      if (/dialog|popup|modal|alert|confirm|layer/i.test(cls)) {
+        const buttons = [...n.querySelectorAll('button')].map(text).filter(Boolean).slice(0, 10);
+        window.__wehagoActions.push({type: 'popup', el: desc(n), title: text(n.querySelector('h1,h2,h3,.title,.tit,strong')), buttons});
+      }
+    }
+  }).observe(document.documentElement, {childList: true, subtree: true});
+})();
+"""
+
 # 값 칸 → 사람이 입력하는 화면 칸. 계정 코드 칸(cd_acctit_cha)은 숨어 있어서
 # 화면의 '차변계정' 칸(nm_acctit_cha)에 계정 코드를 입력한다.
 INPUT_COLUMN = {"ty_mth2": "ty_mth2", "cd_acctit_cha": "nm_acctit_cha"}
@@ -77,6 +132,12 @@ class GridEditor:
             except Exception:
                 pass
         raise LookupError("위하고 카드 매입 표를 찾지 못했습니다. [조회] 를 다시 눌러 주세요.")
+
+    def sort_by_merchant(self):
+        self.frame.evaluate(SORT_JS)
+
+    def check(self, sqs):
+        return self.frame.evaluate(CHECK_JS, [str(x) for x in sqs])
 
     def value(self, item, field):
         return self.frame.evaluate(VALUE_JS, [item, field])

@@ -49,6 +49,13 @@ def cmd_undo(args):
     undo_session(args.log)
 
 
+def cmd_bulk_recon(args):
+    from session import bulk_recon_session
+
+    client = args.client or input("작업할 수임처 이름: ").strip()
+    bulk_recon_session(client)
+
+
 def cmd_plan(args):
     rules, settings = load_rules(), load_settings()
     with open(args.rows, encoding="utf-8-sig", newline="") as f:
@@ -86,6 +93,10 @@ def main():
     p = sub.add_parser("undo", help="원복_*.csv 기록대로 되돌리기")
     p.add_argument("log")
     p.set_defaults(func=cmd_undo)
+
+    p = sub.add_parser("recon5", help="정렬·체크 후 일괄변경 방법 기록")
+    p.add_argument("--client", help="수임처 이름")
+    p.set_defaults(func=cmd_bulk_recon)
 
     p = sub.add_parser("plan", help="CSV 로 분류 결과 미리보기")
     p.add_argument("rows")
