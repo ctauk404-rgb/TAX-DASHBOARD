@@ -10,6 +10,18 @@
 
 **전표전송은 세무사님이 직접 합니다.** 프로그램은 '전송·삭제·마감·취소' 단어가 있는 버튼을 누르지 않습니다.
 
+## 새 PC 에서 처음 쓸 때: `setup.bat`
+
+1. GitHub 에서 ZIP 을 받아 압축을 풉니다 (바탕화면 등)
+2. **`setup.bat` 더블클릭**
+   - "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행**
+   - Python 이 없으면 자동 설치(winget), 이어서 필요한 라이브러리(Playwright) 설치
+   - 브라우저는 PC 에 있는 크롬/엣지를 그대로 씁니다 (추가 다운로드 없음)
+3. "Setup complete" 가 나오면 끝. 이후 `batch.bat` 등을 쓰면 됩니다
+- 자동 설치가 안 되면 [python.org](https://www.python.org/downloads/) 에서 설치 (**"Add python.exe to PATH" 체크**) 후 `setup.bat` 을 다시 실행
+- 다른 bat 파일도 Python 이 없으면 `setup.bat` 을 먼저 자동으로 실행합니다
+- 기존 PC 의 학습 기록을 쓰려면 기존 폴더의 `data` 폴더, `rules.csv`, `settings.json`, `수임처목록.txt` 를 새 폴더로 복사하세요
+
 ## 여러 수임처 한 번에: `batch.bat`
 
 1. `수임처목록.txt` 에 수임처 이름을 한 줄에 하나씩 적습니다 (위하고 수임처 검색에 넣는 이름 그대로, `#` 줄은 무시)
