@@ -65,4 +65,6 @@ def to_row(d, codes):
         "전표상태": label(codes, "ty_jungstat", d.get("ty_jungstat")),
         "국세청": label(codes, "ty_gongjea", d.get("ty_gongjea")),
         "일자": d.get("da_sbook") or "",
+        "연도": str(d.get("da_sbook1") or ""),
+        "카드": str(d.get("card_no") or d.get("cd_card") or ""),
     }

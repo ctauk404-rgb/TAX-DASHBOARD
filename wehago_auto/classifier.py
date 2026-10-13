@@ -19,6 +19,9 @@ DEFAULT_SETTINGS = {
     "editable_states": [],
     # 조회 기간 시작일 (MM.DD 는 올해, YYYY.MM.DD 도 가능). 상반기 전표를 함께 읽어 과거 판단에 씀
     "period_from": "01.01",
+    # 학습: 같은 수임처의 과거 건수가 이 이상이고, 한쪽 유형이 이 비율 이상이면 따름
+    "learn_min_count": 1,
+    "learn_share": 0.8,
     # 자동화에 쓸 브라우저: "chrome" 또는 "edge"
     "browser": "chrome",
     # 매입세액 공제 받는 카드 매입의 유형 (더존 매입매출 유형 '카과')
@@ -115,17 +118,6 @@ def load_settings(path=BASE_DIR / "settings.json"):
     return settings
 
 
-def past_general(history, row):
-    """같은 거래처의 과거(처리된) 전표가 주로 '일반' 이면 그 건수, 아니면 0."""
-    if not history:
-        return 0
-    counts = history.get(normalize(row.get("거래처")))
-    if not counts:
-        return 0
-    general = counts.get(DEFAULT_SETTINGS["non_deductible_type"], 0)
-    return general if general * 2 >= sum(counts.values()) else 0
-
-
 def find_rule(client, row, rules):
     hits = [r for r in rules if r.matches(client, row)]
     return min(hits, key=lambda r: r.rank) if hits else None
@@ -139,12 +131,20 @@ def classify(row, client, rules, settings=DEFAULT_SETTINGS, history=None):
     reasons = []
     review = False
 
-    # 1) 차변계정: 규칙 > 위하고 추천값 > 미정
+    # history: learn.build_profile 결과 (이 수임처의 과거 확정 전표로 학습)
+    from learn import decide
+
+    learned = decide(history, row, settings.get("learn_min_count", 1), settings.get("learn_share", 0.8))
+
+    # 1) 차변계정: 규칙 > 학습(같은 거래처) > 위하고 추천값 > 미정
     rule = find_rule(client, row, rules)
     current = (row.get("차변계정") or "").strip()
     if rule and rule.account:
         account = rule.account
         reasons.append(f"규칙: {rule.merchant or rule.industry}")
+    elif learned["계정"]:
+        account = learned["계정"]
+        reasons.append("학습 계정")
     elif current and current != "미추천" and row.get("전표상태") != "미추천":
         account = current
         reasons.append("위하고 추천 유지")
@@ -164,12 +164,16 @@ def classify(row, client, rules, settings=DEFAULT_SETTINGS, history=None):
         reasons.append(f"{kind} 가맹점")
     elif rule and rule.vat_type:
         vat_type = rule.vat_type
-    elif past_general(history, row):
-        vat_type = general
-        reasons.append(f"과거 전표 일반 {past_general(history, row)}건")
     elif any(a in account for a in settings["non_deductible_accounts"]):
         vat_type = general
         reasons.append("불공제 계정")
+    elif learned["유형"] == "혼재":
+        vat_type = deductible if row.get("유형") not in (deductible, general) else row["유형"]
+        reasons.append(learned["근거"].replace("학습(", "과거 혼재("))
+        review = True
+    elif learned["유형"]:
+        vat_type = learned["유형"]
+        reasons.append(learned["근거"])
     elif str(row.get("세액") or "").strip() != "" and parse_amount(row.get("세액")) == 0:
         vat_type = general
         reasons.append("세액 0원")

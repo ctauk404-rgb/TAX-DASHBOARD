@@ -129,9 +129,9 @@ class Wehago:
         input("\n위하고에 직접 로그인하신 뒤, 수임처 목록 화면이 보이면 Enter를 누르세요...")
         self.page = self.context.pages[-1]
 
-    def set_period_start(self, ymd):
-        """기간 시작일 변경 (예: 2026.01.01). 상반기 전표까지 읽어서 과거 판단에 쓰려고."""
-        box = self._filter("기간").locator("span.fakeinput").first
+    def set_period_start(self, ymd, index=0):
+        """기간 시작일(index 0) / 종료일(index 1) 변경 (예: 2026.01.01)."""
+        box = self._filter("기간").locator("span.fakeinput").nth(index)
         if box.inner_text().strip() == ymd:
             return
         box.click()
@@ -142,9 +142,9 @@ class Wehago:
         self.page.wait_for_timeout(500)
         got = box.inner_text().strip()
         if got != ymd:
-            raise RuntimeError(f"기간 시작일이 '{got}' 임")
+            raise RuntimeError(f"기간 {'시작' if index == 0 else '종료'}일이 '{got}' 임")
 
-    def open_card_purchase_list(self, client, period_from=None):
+    def open_card_purchase_list(self, client, period_from=None, period_to=None):
         def open_client_accounting():
             box = self.find(lambda f: f.get_by_role("textbox"))
             box.fill(client)
@@ -178,7 +178,9 @@ class Wehago:
             from datetime import date
 
             ymd = f"{date.today().year}.{period_from}" if len(period_from) == 5 else period_from
-            self.step(f"기간 시작일을 {ymd} 로 변경 (상반기 전표 포함)", lambda: self.set_period_start(ymd))
+            self.step(f"기간 시작일을 {ymd} 로 변경", lambda: self.set_period_start(ymd))
+        if period_to:
+            self.step(f"기간 종료일을 {period_to} 로 변경", lambda: self.set_period_start(period_to, 1))
         self.step("[조회] 누르기", search)
         # 거래처별 정렬은 화면에서 하지 않고, 읽어 온 데이터를 프로그램이 거래처별로 묶는다.
 

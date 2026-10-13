@@ -26,5 +26,7 @@
     "미용"
   ],
   "period_from": "01.01",
-  "browser": "chrome"
+  "browser": "chrome",
+  "learn_min_count": 1,
+  "learn_share": 0.8
 }

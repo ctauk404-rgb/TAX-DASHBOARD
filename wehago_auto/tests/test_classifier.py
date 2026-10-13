@@ -66,10 +66,33 @@ def test_group_by_merchant():
     assert sorted(len(g) for g in groups.values()) == [1, 2]
 
 
-def test_past_general_history():
-    from collections import Counter
-    hist = {normalize("동네마트"): Counter({"일반": 3, "카과": 1})}
-    d = classify(row("동네마트"), "", RULES, history=hist)
-    assert d.vat_type == "일반" and "과거 전표 일반 3건" in d.reason
-    hist = {normalize("동네마트"): Counter({"일반": 1, "카과": 5})}
-    assert classify(row("동네마트"), "", RULES, history=hist).vat_type == "카과"
+def test_learned_history_per_client():
+    from learn import build_profile
+
+    def past(name, kind, n, 종목="주유소", 카드=""):
+        return [dict(거래처=name, 유형=kind, 차변계정="(판)차량유지비", 종목=종목, 카드=카드)] * n
+
+    # 화물차 수임처: 주유 카과 / 승용차 수임처: 주유 일반 — 같은 주유소라도 수임처마다 다르게
+    truck = build_profile(past("OO주유소", "카과", 5))
+    car = build_profile(past("OO주유소", "일반", 4))
+    r = row("(주)OO주유소", 업태="소매", 종목="주유소")
+    assert classify(r, "", RULES, history=truck).vat_type == "카과"
+    d = classify(r, "", RULES, history=car)
+    assert d.vat_type == "일반" and "학습(같은 거래처" in d.reason
+
+    # 처음 보는 주유소 → 이 수임처의 같은 업종(주유소) 기록을 따름
+    d = classify(row("새주유소", 종목="주유소"), "", RULES, history=car)
+    assert d.vat_type == "일반" and "같은 업종" in d.reason
+
+    # 같은 수임처에서 섞여 있으면 검토
+    mixed = build_profile(past("OO주유소", "카과", 3) + past("OO주유소", "일반", 3))
+    d = classify(r, "", RULES, history=mixed)
+    assert d.review and "과거 혼재" in d.reason
+
+    # 차량별로 카드를 나눠 쓰면 카드 기준이 우선
+    by_card = build_profile(past("OO주유소", "카과", 3, 카드="1111") + past("OO주유소", "일반", 3, 카드="2222"))
+    assert classify(dict(r, 카드="1111"), "", RULES, history=by_card).vat_type == "카과"
+    assert classify(dict(r, 카드="2222"), "", RULES, history=by_card).vat_type == "일반"
+
+    # 간이·면세는 학습보다 우선 (항상 일반)
+    assert classify(row("동네주유", 구분="간이", 종목="주유소"), "", RULES, history=truck).vat_type == "일반"

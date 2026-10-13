@@ -65,6 +65,14 @@ def cmd_batch(args):
         batch_session(clients)
 
 
+def cmd_learn(args):
+    from session import learn_session, read_clients
+
+    clients = args.clients or read_clients(args.file)
+    if clients:
+        learn_session(clients, args.year)
+
+
 def cmd_report(args):
     import webbrowser
 
@@ -122,6 +130,12 @@ def main():
     p.add_argument("clients", nargs="*", help="수임처 이름들 (없으면 수임처목록.txt)")
     p.add_argument("--file", default="수임처목록.txt")
     p.set_defaults(func=cmd_batch)
+
+    p = sub.add_parser("learn", help="지난 연도 카드전표를 수임처별로 학습 (위하고에 쓰지 않음)")
+    p.add_argument("clients", nargs="*", help="수임처 이름들 (없으면 수임처목록.txt)")
+    p.add_argument("--year", default="2025")
+    p.add_argument("--file", default="수임처목록.txt")
+    p.set_defaults(func=cmd_learn)
 
     p = sub.add_parser("report", help="수임처별·거래처별 일반/카과 현황표")
     p.set_defaults(func=cmd_report)

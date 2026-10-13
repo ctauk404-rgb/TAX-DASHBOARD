@@ -27,15 +27,18 @@ def save(store, path=STORE_PATH):
     Path(path).write_text(json.dumps(store, ensure_ascii=False, indent=0), encoding="utf-8")
 
 
-def update(store, client, rows):
-    """rows: codes.to_row 결과. 같은 sq_sbook 은 최신 값으로 덮어쓴다."""
+def update(store, client, rows, prefix=""):
+    """rows: codes.to_row 결과. 같은 sq_sbook 은 최신 값으로 덮어쓴다.
+    prefix: 지난 연도 학습용으로 읽은 전표는 '2025:' 처럼 연도를 붙여 이번 연도와 섞이지 않게 한다."""
     book = store.setdefault(client, {})
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     for r in rows:
         if r.get("sq_sbook") is None:
             continue
-        book[str(r["sq_sbook"])] = {
+        book[f'{prefix}{r["sq_sbook"]}'] = {
             "거래처": r["거래처"], "일자": r.get("일자", ""), "구분": r.get("구분", ""),
+            "업태": r.get("업태", ""), "종목": r.get("종목", ""), "카드": r.get("카드", ""),
+            "연도": r.get("연도", ""),
             "유형": r["유형"], "차변계정": r["차변계정"], "합계": parse_amount(r.get("합계")),
             "전표상태코드": r["전표상태코드"], "갱신": now,
         }
@@ -50,12 +53,16 @@ def apply_results(store, client, results):
             book[str(sq)].update(values)
 
 
-def past_types(store, client, processed_states, exclude=()):
-    """이미 처리된 전표(processed_states)의 거래처별 유형 건수. exclude 는 이번에 고칠 건."""
-    out = {}
+def confirmed(store, client, processed_states, exclude=()):
+    """학습에 쓸 확정 전표: 이미 처리된 상태(processed_states)인 것. exclude 는 이번에 고칠 건."""
     exclude = {str(s) for s in exclude}
-    for sq, r in store.get(client, {}).items():
-        if sq in exclude or r["전표상태코드"] not in processed_states:
-            continue
+    return [r for sq, r in store.get(client, {}).items()
+            if sq not in exclude and r["전표상태코드"] in processed_states]
+
+
+def past_types(store, client, processed_states, exclude=()):
+    """거래처별 유형 건수 (현황·테스트용)."""
+    out = {}
+    for r in confirmed(store, client, processed_states, exclude):
         out.setdefault(normalize(r["거래처"]), Counter())[r["유형"]] += 1
     return out

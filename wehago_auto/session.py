@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright
 
 import codes as codes_mod
+import learn
 import store
 from classifier import load_rules, load_settings
 from grid import HAS_MAIN_JS, STATUS_PROBE_JS, GridEditor
@@ -70,12 +71,13 @@ class Run:
             page.goto(url)
         page.wait_for_timeout(1500)
 
-    def open_client(self, client, ask=True):
-        """수임처의 카드 매입 목록을 열고 표가 뜰 때까지 기다린다."""
+    def open_client(self, client, ask=True, period=None):
+        """수임처의 카드 매입 목록을 열고 표가 뜰 때까지 기다린다. period=(시작, 종료) 로 기간 지정."""
         self.client = client
         self.lists.clear()
         self.w.log = []
-        self.w.open_card_purchase_list(client, load_settings().get("period_from"))
+        start, end = period or (load_settings().get("period_from"), None)
+        self.w.open_card_purchase_list(client, start, end)
         deadline = time.time() + 30
         while time.time() < deadline:
             if self.lists and (self._grid_ready() or self._list_empty()):
@@ -223,9 +225,8 @@ def prepare(run, client, settings, rules, out_dir, stamp, states=None, open_prev
 
     # 과거(처리된) 전표의 거래처별 유형: 이번 기간 외에 이전 실행에서 쌓인 기록도 포함
     processed = {r["전표상태코드"] for r in st[client].values()} - states
-    history = store.past_types(st, client, processed)
-    n_general = sum(1 for c in history.values() if c.get("일반", 0) * 2 >= sum(c.values()))
-    print(f"과거 전표 기록: 거래처 {len(history)}곳 (그중 일반 {n_general}곳 → 이번에도 일반)")
+    history = learn.build_profile(store.confirmed(st, client, processed))
+    print(f"과거 전표 학습: {learn.summary(history)}")
 
     groups = build_groups(rows, client, rules, settings, history)
     preview_path = Path(out_dir) / f"미리보기_{client}_{stamp}.html"
@@ -491,3 +492,55 @@ def _safe(frame, js, arg=None, default=()):
         return out if out is not None else default
     except Exception:
         return default
+
+
+def learn_session(clients, year, out_dir="."):
+    """지난 연도(예: 2025) 카드전표를 수임처별로 읽어 학습 기록(data/기록.json)에 넣는다.
+    위하고에는 아무것도 쓰지 않는다."""
+    year = str(year)
+    period = (f"{year}.01.01", f"{year}.12.31")
+    results = []
+    with sync_playwright() as p:
+        run = Run(p)
+        run.login()
+        for n, client in enumerate(clients, 1):
+            print(f"\n{'=' * 60}\n[{n}/{len(clients)}] {client} — {year}년 카드전표 학습\n{'=' * 60}")
+            try:
+                run.open_client(client, period=period)
+                while True:
+                    data = run.data() if run.lists else []
+                    years = Counter(str(d.get("da_sbook1") or "") for d in data)
+                    if not data or years.most_common(1)[0][0] in (year, ""):
+                        break
+                    answer = input(f"  읽은 전표가 {dict(years)} 년도입니다. 위하고에서 기간(필요하면 기수)을 "
+                                   f"{year}년으로 바꾸고 [조회] 를 누른 뒤 Enter (건너뛰려면 s): ")
+                    if answer.strip().lower() in ("s", "ㄴ"):
+                        raise SkipClient("연도 불일치")
+                codes, _ = codes_mod.merge_grid_labels([])
+                rows = [codes_mod.to_row(d, codes) for d in data]
+                for r in rows:
+                    r["연도"] = r.get("연도") or year
+                st = store.load()
+                store.update(st, client, rows, prefix=f"{year}:")
+                store.save(st)
+                kinds = Counter(r["유형"] for r in rows)
+                msg = f"{len(rows)}건 저장 (" + ", ".join(f"{k} {v}" for k, v in kinds.most_common()) + ")"
+                results.append((client, "완료", msg))
+                print(f"  → {msg}")
+            except SkipClient as e:
+                results.append((client, "건너뜀", str(e)))
+            except Exception as e:
+                results.append((client, "오류", f"{type(e).__name__}: {e}"))
+                print(f"  오류로 이 수임처는 넘어갑니다: {e}")
+            if n < len(clients):
+                try:
+                    run.back_home()
+                except Exception as e:
+                    input(f"수임처 목록 화면으로 돌아가지 못했습니다 ({e}). 직접 수임처 목록을 열고 Enter...")
+                    run.w.page = run.context.pages[-1]
+                    run.home = (run.w.page, run.w.page.url)
+        print("\n학습 결과:")
+        for client, result, msg in results:
+            print(f"  {client}: {result} {msg}")
+        print("이제 batch.bat / apply.bat 을 실행하면 수임처별 과거 기록을 따라 분류합니다.")
+        input("Enter를 누르면 브라우저가 닫힙니다...")
