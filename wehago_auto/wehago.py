@@ -8,6 +8,7 @@
 
 import re
 import time
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from playwright.sync_api import sync_playwright
@@ -41,6 +42,57 @@ def new_context(browser):
     return browser.new_context(no_viewport=True)
 
 
+PROFILE_DIR = Path(__file__).parent / "data" / "browser_profile"
+
+
+def start(p):
+    """자동화 브라우저를 연다.
+
+    settings.json 의 "remember_login" 이 true 면 자동화 전용 프로필(data/browser_profile)을 써서
+    위하고 로그인을 기억한다. 평소 쓰는 크롬과는 완전히 별개라 다른 사이트 로그인은 섞이지 않는다.
+    """
+    from classifier import load_settings
+
+    settings = load_settings()
+    if not settings.get("remember_login"):
+        return new_context(launch(p))
+    first = BROWSER_CHANNELS.get(str(settings.get("browser", "chrome")).lower(), "chrome")
+    order = [first] + [c for c in ("chrome", "msedge") if c != first] + [None]
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    last = None
+    for channel in order:
+        try:
+            return p.chromium.launch_persistent_context(
+                str(PROFILE_DIR), channel=channel, headless=False,
+                args=["--start-maximized"], no_viewport=True)
+        except Exception as e:
+            last = e
+            if "already" in str(e).lower() or "lock" in str(e).lower():
+                break
+    raise RuntimeError("자동화 브라우저를 열지 못했습니다. 다른 자동화 창(검은 창)이 이미 실행 중이면 닫고 "
+                       f"다시 실행해 주세요. ({last})")
+
+
+def stop(context):
+    browser = context.browser
+    context.close()
+    if browser:  # 로그인 기억을 안 쓰는 경우에만 따로 닫을 브라우저가 있음
+        try:
+            stop(context)
+        except Exception:
+            pass
+
+
+def forget_login():
+    """기억한 위하고 로그인 삭제 (자동화 전용 프로필 폴더를 지운다)."""
+    import shutil
+
+    if PROFILE_DIR.exists():
+        shutil.rmtree(PROFILE_DIR)
+        return True
+    return False
+
+
 class SkipClient(Exception):
     """사용자가 이 수임처를 건너뛰기로 함 (여러 수임처 처리 중)."""
 
@@ -48,7 +100,8 @@ class SkipClient(Exception):
 class Wehago:
     def __init__(self, context):
         self.context = context
-        self.page = context.new_page()
+        # 로그인 기억(전용 프로필)을 쓰면 처음부터 탭이 하나 열려 있음
+        self.page = context.pages[0] if context.pages else context.new_page()
         self.log = []  # 단계별 성공/실패 기록
 
     # ---- 기본 도구 -------------------------------------------------------
@@ -126,7 +179,8 @@ class Wehago:
     # ---- 사용자가 정한 작업 순서 -------------------------------------------
     def wait_login(self):
         self.page.goto(WEHAGO_URL)
-        input("\n위하고에 직접 로그인하신 뒤, 수임처 목록 화면이 보이면 Enter를 누르세요...")
+        input("\n위하고 로그인 화면이면 직접 로그인하시고, 수임처 목록 화면이 보이면 Enter를 누르세요"
+              " (로그인이 기억돼 있으면 바로 Enter)...")
         self.page = self.context.pages[-1]
 
     def set_period_start(self, ymd, index=0):
@@ -262,8 +316,7 @@ def recon(client, out_path):
     import json
 
     with sync_playwright() as p:
-        browser = launch(p)
-        context = new_context(browser)
+        context = start(p)
         responses = []
         context.on("response", lambda r: responses.append(r)
                    if r.request.resource_type in ("xhr", "fetch") else None)
@@ -299,7 +352,7 @@ def recon(client, out_path):
         result = {"steps": w.log, "frames": frames, "network": network}
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=1)
-        browser.close()
+        stop(context)
     print(f"\n조사 결과를 저장했습니다: {out_path}")
     print("가맹점명·금액 등 표 내용은 '·' 로 가려져 있습니다. 이 파일을 Claude에게 보내 주세요.")
 
@@ -492,8 +545,7 @@ def recon2(client, out_path):
     import json
 
     with sync_playwright() as p:
-        browser = launch(p)
-        context = new_context(browser)
+        context = start(p)
         lists = []
         context.on("response", lambda r: lists.append(r)
                    if urlsplit(r.url).path == CARD_LIST_PATH and r.request.method == "POST" else None)
@@ -530,7 +582,7 @@ def recon2(client, out_path):
         result = {"steps": w.log, "grids": grids, "code_counts": counts, "edit_requests": edits}
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=1)
-        browser.close()
+        stop(context)
     print(f"\n조사 결과를 저장했습니다: {out_path}")
     print("가맹점명·금액 등 표 내용은 들어 있지 않습니다. 이 파일을 Claude에게 보내 주세요.")
 
@@ -552,8 +604,7 @@ def preview_session(client, out_dir="."):
 
     out_dir = Path(out_dir)
     with sync_playwright() as p:
-        browser = launch(p)
-        context = new_context(browser)
+        context = start(p)
         context.add_init_script(GRID_HOOK_JS)
         lists = []
         context.on("response", lambda r: lists.append(r)
@@ -627,6 +678,6 @@ def preview_session(client, out_dir="."):
         out = out_dir / "recon3_결과.json"
         with open(out, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=1)
-        browser.close()
+        stop(context)
     print(f"\n조사 결과를 저장했습니다: {out}")
     print("미리보기 HTML 은 PC 에만 두시고, recon3_결과.json 만 Claude에게 보내 주세요.")

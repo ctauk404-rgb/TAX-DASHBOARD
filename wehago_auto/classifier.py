@@ -24,6 +24,8 @@ DEFAULT_SETTINGS = {
     "learn_share": 0.8,
     # 자동화에 쓸 브라우저: "chrome" 또는 "edge"
     "browser": "chrome",
+    # true 면 자동화 전용 창에서 위하고 로그인을 기억 (data/browser_profile). 지우려면 logout.bat
+    "remember_login": True,
     # 매입세액 공제 받는 카드 매입의 유형 (더존 매입매출 유형 '카과')
     "deductible_type": "카과",
     # 공제 받지 않는 경우의 유형

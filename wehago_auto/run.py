@@ -73,6 +73,12 @@ def cmd_learn(args):
         learn_session(clients, args.year)
 
 
+def cmd_logout(args):
+    from wehago import forget_login
+
+    print("기억한 위하고 로그인을 지웠습니다." if forget_login() else "기억한 로그인이 없습니다.")
+
+
 def cmd_report(args):
     import webbrowser
 
@@ -136,6 +142,9 @@ def main():
     p.add_argument("--year", default="2025")
     p.add_argument("--file", default="수임처목록.txt")
     p.set_defaults(func=cmd_learn)
+
+    p = sub.add_parser("logout", help="기억한 위하고 로그인 지우기")
+    p.set_defaults(func=cmd_logout)
 
     p = sub.add_parser("report", help="수임처별·거래처별 일반/카과 현황표")
     p.set_defaults(func=cmd_report)

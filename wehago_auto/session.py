@@ -23,7 +23,7 @@ from classifier import load_rules, load_settings
 from grid import HAS_MAIN_JS, STATUS_PROBE_JS, GridEditor
 from plan import Accounts, build_changes
 from preview import build_groups, render
-from wehago import _GRID_JS, CARD_LIST_PATH, GRID_HOOK_JS, SkipClient, Wehago, launch, new_context
+from wehago import _GRID_JS, CARD_LIST_PATH, GRID_HOOK_JS, SkipClient, Wehago, start, stop
 
 ACCOUNT_HELP_PATH = "/smarta/codehelp/acctcd/"
 LOG_FIELDS = ["시각", "수임처", "sq_sbook", "거래처", "field", "칸", "입력 전", "입력 후", "결과", "메모"]
@@ -38,8 +38,7 @@ class Run:
 
     def __init__(self, p, client=None):
         self.client = client
-        self.browser = launch(p)
-        self.context = new_context(self.browser)
+        self.context = start(p)
         self.context.add_init_script(GRID_HOOK_JS)
         self.lists, self.account_help = [], []
         self.context.on("response", self._on_response)
@@ -482,7 +481,7 @@ def bulk_recon_session(client, out_dir="."):
 
         out = out_dir / "recon5_결과.json"
         out.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
-        run.browser.close()
+        stop(run.context)
     print(f"\n조사 결과를 저장했습니다: {out}  — 이 파일을 Claude에게 보내 주세요.")
 
 
