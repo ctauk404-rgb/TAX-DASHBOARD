@@ -79,6 +79,27 @@ def cmd_logout(args):
     print("기억한 위하고 로그인을 지웠습니다." if forget_login() else "기억한 로그인이 없습니다.")
 
 
+def cmd_pl_recon(args):
+    from session import pl_recon_session
+
+    client = args.client or input("조사할 수임처 이름: ").strip()
+    pl_recon_session(client)
+
+
+def cmd_pl_sample(args):
+    import sys
+    from pathlib import Path
+
+    from pl_report import build_reports
+
+    sys.path.insert(0, str(Path(__file__).parent / "samples"))
+    from sample_statements import CORP, PERSON
+
+    out = Path(__file__).parent / "samples"
+    paths, internal, _ = build_reports([CORP, PERSON], out, out / "예시_손익기록.json")
+    print("예시 보고서:", *paths, internal, sep="\n  ")
+
+
 def cmd_report(args):
     import webbrowser
 
@@ -145,6 +166,13 @@ def main():
 
     p = sub.add_parser("logout", help="기억한 위하고 로그인 지우기")
     p.set_defaults(func=cmd_logout)
+
+    p = sub.add_parser("pl-recon", help="손익계산서 화면 조사 (위하고에 쓰지 않음)")
+    p.add_argument("--client", help="수임처 이름")
+    p.set_defaults(func=cmd_pl_recon)
+
+    p = sub.add_parser("pl-sample", help="예시 손익 보고서 만들기")
+    p.set_defaults(func=cmd_pl_sample)
 
     p = sub.add_parser("report", help="수임처별·거래처별 일반/카과 현황표")
     p.set_defaults(func=cmd_report)

@@ -198,18 +198,22 @@ class Wehago:
         if got != ymd:
             raise RuntimeError(f"기간 {'시작' if index == 0 else '종료'}일이 '{got}' 임")
 
+    def open_accounting(self, client):
+        """수임처 목록에서 수임처를 검색해 [회계] (SmartA) 를 연다."""
+        box = self.find(lambda f: f.get_by_role("textbox"))
+        box.fill(client)
+        box.press("Enter")
+        self.page.wait_for_timeout(1500)
+        name = self.find(lambda f: f.get_by_text(client))
+        row_button = name.locator(
+            "xpath=ancestor::*[.//*[normalize-space(text())='회계']][1]"
+            "//*[normalize-space(text())='회계']"
+        ).first
+        self.click(row_button)
+
     def open_card_purchase_list(self, client, period_from=None, period_to=None):
         def open_client_accounting():
-            box = self.find(lambda f: f.get_by_role("textbox"))
-            box.fill(client)
-            box.press("Enter")
-            self.page.wait_for_timeout(1500)
-            name = self.find(lambda f: f.get_by_text(client))
-            row_button = name.locator(
-                "xpath=ancestor::*[.//*[normalize-space(text())='회계']][1]"
-                "//*[normalize-space(text())='회계']"
-            ).first
-            self.click(row_button)
+            self.open_accounting(client)
 
         def open_credit_card():
             self.click(self.find(lambda f: f.get_by_text("신용카드", exact=True)))

@@ -7,6 +7,7 @@
 
 import csv
 import json
+import re
 import time
 import webbrowser
 from collections import Counter
@@ -543,3 +544,96 @@ def learn_session(clients, year, out_dir="."):
             print(f"  {client}: {result} {msg}")
         print("이제 batch.bat / apply.bat 을 실행하면 수임처별 과거 기록을 따라 분류합니다.")
         input("Enter를 누르면 브라우저가 닫힙니다...")
+
+
+# ---- 손익계산서 화면 조사 --------------------------------------------------------
+_FILTERS_JS = r"""
+() => [...document.querySelectorAll('strong.inquiry_tit')].map(t => {
+  const box = t.nextElementSibling;
+  const fake = box && box.querySelector('span.fakeinput');
+  const inp = box && box.querySelector('input');
+  return [t.textContent.trim(), (fake ? fake.textContent : (inp ? inp.value : '')).trim().slice(0, 40)];
+})
+"""
+
+
+def _response_sample(value):
+    """가장 큰 목록의 앞 8줄: 글자(계정과목명 등)는 그대로, 숫자는 자료형만."""
+    best = []
+
+    def walk(v):
+        nonlocal best
+        if isinstance(v, list):
+            if len(v) > len(best) and v and isinstance(v[0], dict):
+                best = v
+            for x in v[:3]:
+                walk(x)
+        elif isinstance(v, dict):
+            for x in v.values():
+                walk(x)
+
+    walk(value)
+    out = []
+    for row in best[:8]:
+        out.append({k: (x if isinstance(x, str) and len(x) <= 40 and not re.search(r"\d{6,}", x)
+                        else type(x).__name__) for k, x in row.items()})
+    return {"rows": len(best), "sample": out}
+
+
+def pl_recon_session(client, out_dir="."):
+    """손익계산서를 조회할 때 위하고가 받는 데이터의 구조를 기록한다 (위하고에는 쓰지 않음)."""
+    from grid import ACTION_LOG_JS
+    from wehago import body_shape, shape
+
+    out_dir = Path(out_dir)
+    with sync_playwright() as p:
+        run = Run(p, client)
+        run.context.add_init_script(ACTION_LOG_JS)
+        run.login()
+        run.w.step(f"수임처 '{client}' 의 [회계] 열기", lambda: run.w.open_accounting(client))
+
+        captured = []
+        run.context.on("response", lambda r: captured.append(r)
+                       if r.request.resource_type in ("xhr", "fetch") else None)
+        for page in run.context.pages:
+            for f in page.frames:
+                _safe(f, "() => { window.__wehagoRecording = true; }")
+        print("\n위하고에서 직접 해 주세요:")
+        print("  1) 왼쪽 메뉴에서 결산재무제표 → 손익계산서 를 엽니다")
+        print("  2) 기간을 '지난달 한 달' 로 정하고 [조회]")
+        print("  3) 가능하면 기간을 '1월 ~ 지난달(누계)' 로 바꿔 한 번 더 [조회]")
+        print("  ※ 화면에 '월별' 손익을 보는 메뉴/옵션이 있으면 그것도 한 번 조회해 주세요")
+        input("다 하셨으면 Enter를 누르세요...")
+        how = input("어느 메뉴에서 어떻게 조회하셨는지 한 줄로 적어 주세요: ")
+
+        page = run.context.pages[-1]
+        filters = [x for f in page.frames for x in _safe(f, _FILTERS_JS)]
+        actions = [a for pg in run.context.pages for f in pg.frames
+                   for a in _safe(f, "() => window.__wehagoActions || []")]
+        items = []
+        for r in captured:
+            path = urlsplit(r.url).path
+            if "/collect" in path or "lpevent" in path or "/noti/" in path:
+                continue
+            item = {"method": r.request.method, "path": path, "status": r.status}
+            if r.request.method != "GET":
+                item["request"] = body_shape(r.request)
+                params = dict(re.findall(r"(?:^|&)((?:dt|da|ym|gisu|ty|from|to|mm|month)[^=&]*)=([^&]{0,20})",
+                                         r.request.post_data or ""))
+                if params:
+                    item["request_dates"] = params
+            if "json" in r.headers.get("content-type", ""):
+                try:
+                    body = r.json()
+                    item["shape"] = shape(body)
+                    item["largest_list"] = _response_sample(body)
+                except Exception:
+                    pass
+            items.append(item)
+        result = {"client_menu_clicks": actions[-40:], "filters": filters, "how_by_user": how,
+                  "responses": items[-60:]}
+        out = out_dir / "손익조사_결과.json"
+        out.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+        stop(run.context)
+    print(f"\n조사 결과를 저장했습니다: {out}  — 이 파일을 Claude에게 보내 주세요.")
+    print("(계정과목 이름과 조회 조건만 들어 있고, 금액·거래처 번호는 들어 있지 않습니다)")
