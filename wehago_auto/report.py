@@ -18,27 +18,30 @@ def summarize(store):
             groups[normalize(r["거래처"])].append(r)
         rows = []
         for items in groups.values():
-            types = Counter(r["유형"] for r in items)
+            label = lambda t: "공제" if t in ("카과", "현과") else t
+            types = Counter(label(r["유형"]) for r in items)
             amounts = Counter()
             for r in items:
-                amounts[r["유형"]] += r.get("합계") or 0
+                amounts[label(r["유형"])] += r.get("합계") or 0
             main = types.most_common(1)[0][0]
             rows.append({
                 "거래처": items[0]["거래처"],
                 "구분": ", ".join(sorted({r.get("구분", "") for r in items} - {""})),
                 "판정": main if len(types) == 1 else f"{main} (혼재)",
-                "일반 건수": types.get("일반", 0), "카과 건수": types.get("카과", 0),
-                "일반 금액": amounts.get("일반", 0), "카과 금액": amounts.get("카과", 0),
-                "기타": ", ".join(f"{k} {v}" for k, v in types.items() if k not in ("일반", "카과")),
+                "자료": ", ".join(sorted({r.get("자료", "신용카드") for r in items})),
+                "일반 건수": types.get("일반", 0), "공제 건수": types.get("공제", 0),
+                "일반 금액": amounts.get("일반", 0), "공제 금액": amounts.get("공제", 0),
+                "기타": ", ".join(f"{k} {v}" for k, v in types.items() if k not in ("일반", "공제")),
                 "차변계정": ", ".join(k for k, _ in Counter(r["차변계정"] for r in items).most_common(2)),
                 "기간": f'{min(r.get("일자", "") for r in items)} ~ {max(r.get("일자", "") for r in items)}',
             })
-        rows.sort(key=lambda r: (r["판정"].startswith("카과"), r["거래처"]))
+        rows.sort(key=lambda r: (r["판정"].startswith("공제"), r["거래처"]))
         out[client] = rows
     return out
 
 
-COLUMNS = ["거래처", "구분", "판정", "일반 건수", "카과 건수", "일반 금액", "카과 금액", "기타", "차변계정", "기간"]
+COLUMNS = ["거래처", "자료", "구분", "판정", "일반 건수", "공제 건수", "일반 금액", "공제 금액", "기타", "차변계정",
+           "기간"]
 
 
 def write_csv(summary, path):
@@ -61,16 +64,16 @@ def render(summary):
             + "".join(f'<td class="{"n" if isinstance(r[c], int) else ""}">{num(r[c])}</td>' for c in COLUMNS)
             + "</tr>" for r in rows)
         sections.append(
-            f'<section><h2>{e(client)}</h2><p class=note>거래처 {len(rows)}곳 · 일반 {gen}곳 · 카과 {len(rows) - gen}곳</p>'
+            f'<section><h2>{e(client)}</h2><p class=note>거래처 {len(rows)}곳 · 일반 {gen}곳 · 공제(카과·현과) {len(rows) - gen}곳</p>'
             f'<table><thead><tr>{"".join(f"<th>{c}</th>" for c in COLUMNS)}</tr></thead><tbody>{body}</tbody></table></section>')
-    return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>카드 매입 일반/카과 현황</title>
+    return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>카드·현금영수증 매입 공제 현황</title>
 <style>body{{font-family:"Malgun Gothic",sans-serif;margin:20px;color:#222;background:#fff}}
 h1{{font-size:20px}} h2{{font-size:16px;margin:24px 0 4px}} .note{{color:#666;font-size:12px;margin:0}}
 table{{border-collapse:collapse;width:100%;font-size:13px;margin-top:6px}}
 th,td{{border:1px solid #ddd;padding:4px 6px}} th{{background:#f3f4f6}} td.n{{text-align:right}}
 tr.mix{{background:#fff4e5}}</style></head><body>
-<h1>카드 매입 일반/카과 현황 (수임처별 · 거래처별)</h1>
-<p class=note>{datetime.now():%Y-%m-%d %H:%M} 기준 · 주황색: 같은 거래처에 일반과 카과가 섞여 있음</p>
+<h1>신용카드·현금영수증 매입 공제/일반 현황 (수임처별 · 거래처별)</h1>
+<p class=note>{datetime.now():%Y-%m-%d %H:%M} 기준 · 주황색: 같은 거래처에 공제와 일반이 섞여 있음</p>
 {"".join(sections)}</body></html>"""
 
 

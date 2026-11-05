@@ -14,7 +14,9 @@ BASE_DIR = Path(__file__).parent
 
 DEFAULT_SETTINGS = {
     # 유형 이름 → 위하고 유형 코드(ty_mth2). 유형 칸에 이 숫자를 입력한다.
-    "type_codes": {"카과": "57", "일반": "3"},
+    "type_codes": {"카과": "57", "현과": "61", "일반": "3"},
+    # 위하고에서 처리할 자동전표 자료 (공제 여부 판단이 필요한 매입만)
+    "kinds": ["신용카드", "현금영수증"],
     # 자동 입력할 전표상태 코드 (비어 있으면 실행할 때 물어봄)
     "editable_states": [],
     # 조회 기간 시작일 (MM.DD 는 올해, YYYY.MM.DD 도 가능). 상반기 전표를 함께 읽어 과거 판단에 씀
@@ -40,6 +42,18 @@ DEFAULT_SETTINGS = {
         "목욕", "이발", "미용",
     ],
 }
+
+# 자료별 공제 유형: 신용카드 → 카과(57), 현금영수증 → 현과(61)
+KINDS = {
+    "신용카드": {"deductible": "카과", "prefix": ""},
+    "현금영수증": {"deductible": "현과", "prefix": "현금:"},
+}
+DEDUCTIBLE_TYPES = {k["deductible"] for k in KINDS.values()}
+
+
+def kind_settings(settings, kind):
+    return {**settings, "deductible_type": KINDS[kind]["deductible"]}
+
 
 _CORP_MARKS = re.compile(r"주식회사|유한회사|\(주\)|\(유\)|㈜")
 
@@ -174,7 +188,8 @@ def classify(row, client, rules, settings=DEFAULT_SETTINGS, history=None):
         reasons.append(learned["근거"].replace("학습(", "과거 혼재("))
         review = True
     elif learned["유형"]:
-        vat_type = learned["유형"]
+        # 신용카드(카과)·현금영수증(현과) 기록은 '공제' 로 같이 본다
+        vat_type = deductible if learned["유형"] in DEDUCTIBLE_TYPES else learned["유형"]
         reasons.append(learned["근거"])
     elif str(row.get("세액") or "").strip() != "" and parse_amount(row.get("세액")) == 0:
         vat_type = general

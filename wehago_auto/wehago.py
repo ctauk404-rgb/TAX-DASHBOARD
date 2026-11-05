@@ -211,12 +211,12 @@ class Wehago:
         ).first
         self.click(row_button)
 
-    def open_card_purchase_list(self, client, period_from=None, period_to=None):
+    def open_card_purchase_list(self, client, period_from=None, period_to=None, kind="신용카드"):
         def open_client_accounting():
             self.open_accounting(client)
 
         def open_credit_card():
-            self.click(self.find(lambda f: f.get_by_text("신용카드", exact=True)))
+            self.click(self.find(lambda f: f.get_by_text(kind, exact=True)))
 
         def check_all_cards():
             value = self.filter_value("카드")
@@ -228,9 +228,10 @@ class Wehago:
             self.click(self.find(lambda f: f.get_by_role("button", name="조회")))
 
         self.step(f"수임처 '{client}' 의 [회계] 열기", open_client_accounting)
-        self.step("자동전표처리 [신용카드] 열기", open_credit_card)
+        self.step(f"자동전표처리 [{kind}] 열기", open_credit_card)
         self.step("구분을 '2. 매입' 으로 변경", lambda: self.choose("구분", "2. 매입"))
-        self.step("카드를 '전체거래처' 로 확인", check_all_cards)
+        if kind == "신용카드":
+            self.step("카드를 '전체거래처' 로 확인", check_all_cards)
         self.step("전표상태를 '전체' 로 변경", lambda: self.choose("전표상태", "전체"))
         if period_from:
             from datetime import date
@@ -363,6 +364,8 @@ def recon(client, out_path):
 
 # ---- 2차 조사: 표(RealGrid) 구조와 저장 방식 --------------------------------
 CARD_LIST_PATH = "/smarta/saac0105/6/"  # 카드 매입 목록을 내려주는 위하고 API
+# 자동전표 목록 API (신용카드 6, 현금영수증 등 다른 자료는 번호만 다름)
+LIST_PATH_RE = re.compile(r"^/smarta/saac0105/\d+/$")
 
 # 화면의 표는 RealGrid(캔버스)로 그려져서 글자를 읽을 수 없다.
 # 대신 표 객체를 찾아서 칸 정의(칸 이름, 코드→표시값 목록)만 꺼낸다.

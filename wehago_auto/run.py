@@ -100,6 +100,13 @@ def cmd_pl_sample(args):
     print("예시 보고서:", *paths, internal, sep="\n  ")
 
 
+def cmd_site_recon(args):
+    from site_recon import site_recon_session
+
+    url = args.url or input("사이트 주소를 아시면 입력하세요 (모르면 그냥 Enter): ").strip()
+    site_recon_session(args.name, url)
+
+
 def cmd_report(args):
     import webbrowser
 
@@ -173,6 +180,11 @@ def main():
 
     p = sub.add_parser("pl-sample", help="예시 손익 보고서 만들기")
     p.set_defaults(func=cmd_pl_sample)
+
+    p = sub.add_parser("site-recon", help="처음 보는 사이트(위멤버스 등) 구조 조사")
+    p.add_argument("--name", default="위멤버스")
+    p.add_argument("--url", default="")
+    p.set_defaults(func=cmd_site_recon)
 
     p = sub.add_parser("report", help="수임처별·거래처별 일반/카과 현황표")
     p.set_defaults(func=cmd_report)

@@ -96,3 +96,15 @@ def test_learned_history_per_client():
 
     # 간이·면세는 학습보다 우선 (항상 일반)
     assert classify(row("동네주유", 구분="간이", 종목="주유소"), "", RULES, history=truck).vat_type == "일반"
+
+
+def test_cash_receipt_uses_hyeongwa():
+    from classifier import DEFAULT_SETTINGS, kind_settings
+    from learn import build_profile
+
+    cash = kind_settings(DEFAULT_SETTINGS, "현금영수증")
+    assert classify(row("문구점"), "", RULES, cash).vat_type == "현과"
+    assert classify(row("문구점", 구분="간이"), "", RULES, cash).vat_type == "일반"
+    # 같은 거래처의 신용카드 기록(카과)도 공제로 보고 현금영수증은 현과
+    hist = build_profile([dict(거래처="문구점", 유형="카과", 차변계정="(판)소모품비", 종목="문구")] * 3)
+    assert classify(row("문구점"), "", RULES, cash, history=hist).vat_type == "현과"

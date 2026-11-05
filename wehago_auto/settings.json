@@ -1,6 +1,7 @@
 {
   "type_codes": {
     "카과": "57",
+    "현과": "61",
     "일반": "3"
   },
   "editable_states": [],
@@ -29,5 +30,9 @@
   "browser": "chrome",
   "learn_min_count": 1,
   "learn_share": 0.8,
-  "remember_login": true
+  "remember_login": true,
+  "kinds": [
+    "신용카드",
+    "현금영수증"
+  ]
 }

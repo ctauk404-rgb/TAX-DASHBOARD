@@ -27,7 +27,7 @@ def save(store, path=STORE_PATH):
     Path(path).write_text(json.dumps(store, ensure_ascii=False, indent=0), encoding="utf-8")
 
 
-def update(store, client, rows, prefix=""):
+def update(store, client, rows, prefix="", kind="신용카드"):
     """rows: codes.to_row 결과. 같은 sq_sbook 은 최신 값으로 덮어쓴다.
     prefix: 지난 연도 학습용으로 읽은 전표는 '2025:' 처럼 연도를 붙여 이번 연도와 섞이지 않게 한다."""
     book = store.setdefault(client, {})
@@ -38,19 +38,19 @@ def update(store, client, rows, prefix=""):
         book[f'{prefix}{r["sq_sbook"]}'] = {
             "거래처": r["거래처"], "일자": r.get("일자", ""), "구분": r.get("구분", ""),
             "업태": r.get("업태", ""), "종목": r.get("종목", ""), "카드": r.get("카드", ""),
-            "연도": r.get("연도", ""),
+            "연도": r.get("연도", ""), "자료": kind,
             "유형": r["유형"], "차변계정": r["차변계정"], "합계": parse_amount(r.get("합계")),
             "전표상태코드": r["전표상태코드"], "갱신": now,
         }
     return store
 
 
-def apply_results(store, client, results):
+def apply_results(store, client, results, prefix=""):
     """자동 입력 결과(sq → {'유형': .., '차변계정': ..}) 반영."""
     book = store.get(client, {})
     for sq, values in results.items():
-        if str(sq) in book:
-            book[str(sq)].update(values)
+        if f"{prefix}{sq}" in book:
+            book[f"{prefix}{sq}"].update(values)
 
 
 def confirmed(store, client, processed_states, exclude=()):
